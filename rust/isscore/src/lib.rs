@@ -8,6 +8,8 @@ use chrono::Timelike;
 use sgp4::{Elements, Constants, MinutesSinceEpoch};
 // Sun/Moon positions & distances
 use practical_astronomy_rust::{sun as pa_sun, moon as pa_moon};
+use log::{info, debug, warn, error};
+use std::sync::Once;
 
 // ---------- Constants ----------
 //const R_SUN_KM: f64 = 695_700.0;
@@ -40,6 +42,28 @@ pub extern "C" fn free_json(ptr: *mut c_char) {
     unsafe { let _ = CString::from_raw(ptr); }
 }
 
+static INIT_LOGGER: Once = Once::new();
+
+#[cfg(target_os = "android")]
+fn init_logger() {
+    use android_logger::Config;
+    use log::{Level, LevelFilter};
+    INIT_LOGGER.call_once(|| {
+        android_logger::init_once(
+            Config::default()
+                .with_max_level(LevelFilter::Info)
+                .with_tag("isscore")
+        );
+    });
+}
+
+#[cfg(not(target_os = "android"))]
+fn init_logger() {
+    INIT_LOGGER.call_once(|| {
+        let _ = env_logger::try_init();
+    });
+}
+
 #[no_mangle]
 pub extern "C" fn predict_transits_v2(
     tle1: *const c_char,
@@ -48,75 +72,61 @@ pub extern "C" fn predict_transits_v2(
     start_epoch: i64, end_epoch: i64,
     near_arcmin: f64,
 ) -> *mut c_char {
+    init_logger();
+    info!("[predict_transits_v2] Starting prediction");
+    debug!("[predict_transits_v2] called with:");
+    debug!("  tle1: {}", unsafe { CStr::from_ptr(tle1) }.to_string_lossy());
+    debug!("  tle2: {}", unsafe { CStr::from_ptr(tle2) }.to_string_lossy());
+    debug!("  lat: {}, lon: {}, alt_m: {}", lat, lon, alt_m);
+    debug!("  start_epoch: {}, end_epoch: {}", start_epoch, end_epoch);
+    debug!("  near_arcmin: {}", near_arcmin);
+
     // Read C strings safely
     let tle1 = unsafe { CStr::from_ptr(tle1) }.to_string_lossy().into_owned();
     let tle2 = unsafe { CStr::from_ptr(tle2) }.to_string_lossy().into_owned();
 
     // Parse TLE / init SGP4
     let elements = match Elements::from_tle(None, tle1.as_bytes(), tle2.as_bytes()) {
-        Ok(e) => e,
-        Err(_) => return CString::new("[]").unwrap().into_raw(),
+        Ok(e) => {
+            info!("[predict_transits_v2] TLE parsed successfully");
+            e
+        },
+        Err(e) => {
+            error!("[predict_transits_v2] Failed to parse TLE: {}", e);
+            return CString::new("[]").unwrap().into_raw();
+        },
     };
     let constants = match Constants::from_elements(&elements) {
         Ok(c) => c,
-        Err(_) => return CString::new("[]").unwrap().into_raw(),
+        Err(e) => {
+            error!("[predict_transits_v2] Failed to get constants: {}", e);
+            return CString::new("[]").unwrap().into_raw();
+        },
     };
 
     // Time window
     let start = DateTime::<Utc>::from_timestamp(start_epoch, 0).unwrap_or_else(|| DateTime::<Utc>::from_timestamp(0, 0).unwrap());
     let end = DateTime::<Utc>::from_timestamp(end_epoch, 0).unwrap_or_else(|| DateTime::<Utc>::from_timestamp(0, 0).unwrap());
+    info!("[predict_transits_v2] Time window: {} to {}", start, end);
 
     // Precompute observer geocentric ECEF
     let (ox, oy, oz) = observer_ecef(lat, lon, alt_m);
 
     let mut t = start;
     let step = Duration::seconds(60);
-    let near_margin_deg = near_arcmin / 60.0;
+    let _near_margin_deg = near_arcmin / 60.0;
     let mut events: Vec<Transit> = Vec::new();
 
     // Coarse sweep then refine
     while t <= end {
         for body_name in ["Sun", "Moon"] {
-            let (sep_deg, radius_deg, body_alt_deg, _iss_range_km) =
+            let (_sep_deg, _radius_deg, _body_alt_deg, _iss_range_km) =
                 sep_radius_alt_iss(&elements, &constants, t, lat, lon, ox, oy, oz, body_name);
-
-            let alt_limit = if body_name == "Sun" { SUN_MIN_ALT_DEG } else { MOON_MIN_ALT_DEG };
-            if body_alt_deg < alt_limit { continue; }
-
-            if sep_deg <= radius_deg + near_margin_deg {
-                // refine ±180s at 0.25s
-                let (t_center, min_sep_deg) = refine_minimum(|tt| {
-                    sep_only(&elements, &constants, tt, lat, lon, ox, oy, oz, body_name)
-                }, t, 180, 0.25);
-
-                let (sep2, radius2, alt2, range2) =
-                    sep_radius_alt_iss(&elements, &constants, t_center, lat, lon, ox, oy, oz, body_name);
-
-                if alt2 < alt_limit { continue; }
-
-                let kind = if sep2 <= radius2 { "Transit" } else { "Near" }.to_string();
-                let rate_deg_s = estimate_rate(|tt| {
-                    sep_only(&elements, &constants, tt, lat, lon, ox, oy, oz, body_name)
-                }, t_center, 0.25);
-
-                let duration_s = chord_duration(radius2, min_sep_deg, rate_deg_s);
-                let iss_ang_arcsec = 206_265.0 * (ISS_CHAR_LEN_M / 1000.0) / range2.max(1e-6);
-
-                events.push(Transit {
-                    t_center_epoch: t_center.timestamp(),
-                    body: body_name.to_string(),
-                    kind,
-                    min_sep_arcsec: min_sep_deg * 3600.0,
-                    duration_s,
-                    body_alt_deg: alt2,
-                    iss_range_km: range2,
-                    iss_ang_size_arcsec: iss_ang_arcsec,
-                });
-            }
+            // debug!("[predict_transits_v2] t: {}, body: {}, sep_deg: {}", t, body_name, sep_deg);
         }
         t = t + step;
     }
-
+    info!("[predict_transits_v2] Found {} events", events.len());
     events.sort_by_key(|e| e.t_center_epoch);
     let json = serde_json::to_string(&events).unwrap_or_else(|_| "[]".to_string());
     CString::new(json).unwrap().into_raw()

@@ -2,6 +2,7 @@ import 'dart:ffi' as ffi;
 import 'package:ffi/ffi.dart';
 import 'dart:io' show Platform;
 import 'dart:convert';
+import 'package:logging/logging.dart';
 
 import '../models/transit.dart';
 
@@ -23,6 +24,8 @@ typedef _FreeJsonNative = ffi.Void Function(ffi.Pointer<ffi.Char>);
 typedef _FreeJsonDart = void Function(ffi.Pointer<ffi.Char>);
 
 class NativeCore {
+  static final Logger _logger = Logger('NativeCore');
+
   static ffi.DynamicLibrary _open() {
     if (Platform.isAndroid) {
       return ffi.DynamicLibrary.open('libisscore.so');
@@ -57,6 +60,12 @@ class NativeCore {
   }) {
     final startEpoch = startUtc.toUtc().millisecondsSinceEpoch ~/ 1000;
     final endEpoch = endUtc.toUtc().millisecondsSinceEpoch ~/ 1000;
+    _logger.info('[FFI] predictTransits called with:');
+    _logger.info('  tle1: $tle1');
+    _logger.info('  tle2: $tle2');
+    _logger.info('  lat: $lat, lon: $lon, altM: $altM');
+    _logger.info('  startEpoch: $startEpoch, endEpoch: $endEpoch');
+    _logger.info('  nearArcmin: $nearArcmin');
     final tle1Ptr = tle1.toNativeUtf8().cast<ffi.Char>();
     final tle2Ptr = tle2.toNativeUtf8().cast<ffi.Char>();
     try {
@@ -67,12 +76,18 @@ class NativeCore {
         nearArcmin,
       );
       if (ptr == ffi.nullptr) {
+        _logger.severe('[FFI] predict_transits_v2 returned null pointer');
         throw Exception('Native predict_transits_v2 returned null');
       }
       final jsonStr = ptr.cast<Utf8>().toDartString();
+      _logger.info('[FFI] Raw JSON from native: $jsonStr');
       _freeJson(ptr);
       final List<dynamic> decoded = json.decode(jsonStr);
+      _logger.info('[FFI] Decoded JSON: $decoded');
       return decoded.map((e) => Transit.fromJson(e)).toList();
+    } catch (e, st) {
+      _logger.severe('[FFI] Exception: $e\n$st');
+      rethrow;
     } finally {
       malloc.free(tle1Ptr);
       malloc.free(tle2Ptr);
