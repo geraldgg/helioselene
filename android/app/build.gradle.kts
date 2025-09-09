@@ -47,11 +47,16 @@ flutter {
 tasks.register<Exec>("buildRustAndroid") {
     group = "build"
     description = "Build Rust native library for Android"
-    commandLine("powershell", "-ExecutionPolicy", "Bypass", "-File", "../../scripts/build_rust_android.ps1")
+    val projectRoot = rootProject.projectDir.parentFile
+    val scriptPath = "scripts/build_rust_android.ps1"
+    println("[buildRustAndroid] projectRoot = $projectRoot")
+    commandLine("powershell", "-ExecutionPolicy", "Bypass", "-File", scriptPath)
+    workingDir = projectRoot
+    standardOutput = System.out
+    errorOutput = System.err
+    isIgnoreExitValue = false
 }
 
-tasks.whenTaskAdded {
-    if (name == "preBuild") {
-        dependsOn("buildRustAndroid")
-    }
+tasks.named("preBuild") {
+    dependsOn("buildRustAndroid")
 }
