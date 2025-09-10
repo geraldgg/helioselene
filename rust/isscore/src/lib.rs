@@ -47,11 +47,11 @@ static INIT_LOGGER: Once = Once::new();
 #[cfg(target_os = "android")]
 fn init_logger() {
     use android_logger::Config;
-    use log::{Level, LevelFilter};
+    use log::LevelFilter;
     INIT_LOGGER.call_once(|| {
         android_logger::init_once(
             Config::default()
-                .with_max_level(LevelFilter::Info)
+                .with_max_level(LevelFilter::Debug) // Set to DEBUG level
                 .with_tag("isscore")
         );
     });
@@ -60,7 +60,9 @@ fn init_logger() {
 #[cfg(not(target_os = "android"))]
 fn init_logger() {
     INIT_LOGGER.call_once(|| {
-        let _ = env_logger::try_init();
+        let _ = env_logger::Builder::from_default_env()
+            .filter_level(log::LevelFilter::Debug) // Set to DEBUG level
+            .try_init();
     });
 }
 
@@ -120,9 +122,27 @@ pub extern "C" fn predict_transits_v2(
     // Coarse sweep then refine
     while t <= end {
         for body_name in ["Sun", "Moon"] {
-            let (_sep_deg, _radius_deg, _body_alt_deg, _iss_range_km) =
+            let (sep_deg, radius_deg, body_alt_deg, iss_range_km) =
                 sep_radius_alt_iss(&elements, &constants, t, lat, lon, ox, oy, oz, body_name);
-            // debug!("[predict_transits_v2] t: {}, body: {}, sep_deg: {}", t, body_name, sep_deg);
+
+            debug!("[predict_transits_v2] t: {}, body: {}, sep_deg: {:.2}, radius_deg: {:.2}, body_alt_deg: {:.2}, iss_range_km: {:.2}",
+                t, body_name, sep_deg, radius_deg, body_alt_deg, iss_range_km);
+
+            if body_alt_deg < SUN_MIN_ALT_DEG && body_name == "Sun" {
+                debug!("[predict_transits_v2] Skipping {} due to low altitude: {:.2}", body_name, body_alt_deg);
+                continue;
+            }
+            if body_alt_deg < MOON_MIN_ALT_DEG && body_name == "Moon" {
+                debug!("[predict_transits_v2] Skipping {} due to low altitude: {:.2}", body_name, body_alt_deg);
+                continue;
+            }
+
+            if sep_deg * 60.0 > near_arcmin {
+                debug!("[predict_transits_v2] Skipping {} due to large separation: {:.2} arcmin", body_name, sep_deg * 60.0);
+                continue;
+            }
+
+            debug!("[predict_transits_v2] Potential event detected for {} at t: {}", body_name, t);
         }
         t = t + step;
     }
