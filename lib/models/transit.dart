@@ -7,6 +7,7 @@ class Transit {
   final double bodyAltitudeDeg;
   final double issRangeKm;
   final double issAngularSizeArcsec;
+  final String? satellite; // Optional satellite name (ISS, Tiangong, etc.)
 
   Transit({
     required this.timeUtc,
@@ -17,6 +18,7 @@ class Transit {
     required this.bodyAltitudeDeg,
     required this.issRangeKm,
     required this.issAngularSizeArcsec,
+    this.satellite,
   });
 
   static Transit fromJson(Map<String, dynamic> j) {
@@ -27,8 +29,33 @@ class Transit {
       minSeparationArcsec: (j['min_sep_arcsec'] ?? 0).toDouble(),
       durationSeconds: (j['duration_s'] ?? 0).toDouble(),
       bodyAltitudeDeg: (j['body_alt_deg'] ?? 0).toDouble(),
-      issRangeKm: (j['iss_range_km'] ?? 0).toDouble(),
-      issAngularSizeArcsec: (j['iss_ang_size_arcsec'] ?? 0).toDouble(),
+      issRangeKm: (j['sat_range_km'] ?? j['iss_range_km'] ?? 0).toDouble(),
+      issAngularSizeArcsec: (j['sat_ang_size_arcsec'] ?? j['iss_ang_size_arcsec'] ?? 0).toDouble(),
+      satellite: j['satellite'] as String?,
+    );
+  }
+
+  Transit copyWith({
+    DateTime? timeUtc,
+    String? body,
+    String? kind,
+    double? minSeparationArcsec,
+    double? durationSeconds,
+    double? bodyAltitudeDeg,
+    double? issRangeKm,
+    double? issAngularSizeArcsec,
+    String? satellite,
+  }) {
+    return Transit(
+      timeUtc: timeUtc ?? this.timeUtc,
+      body: body ?? this.body,
+      kind: kind ?? this.kind,
+      minSeparationArcsec: minSeparationArcsec ?? this.minSeparationArcsec,
+      durationSeconds: durationSeconds ?? this.durationSeconds,
+      bodyAltitudeDeg: bodyAltitudeDeg ?? this.bodyAltitudeDeg,
+      issRangeKm: issRangeKm ?? this.issRangeKm,
+      issAngularSizeArcsec: issAngularSizeArcsec ?? this.issAngularSizeArcsec,
+      satellite: satellite ?? this.satellite,
     );
   }
 }

@@ -1,0 +1,111 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug ISS Transits - Basic",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/iss_transits.py",
+            "args": [
+                "--lat", "48.786839",
+                "--lon", "2.49813",
+                "--days", "14",
+                "--max-distance-km=35",
+                "--start-utc", "2025-09-13T20:00:00Z"
+                "--verbose"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+            "justMyCode": true
+        },
+        {
+            "name": "Debug ISS Transits - Extended Search",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/iss_transits.py",
+            "args": [
+                "--lat", "48.786839",
+                "--lon", "2.49813",
+                "--days", "14",
+                "--max-distance-km", "50",
+                "--grid-step-km", "5",
+                "--verbose"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+            "justMyCode": true
+        },
+        {
+            "name": "Debug ISS Transits - JSON Output",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/iss_transits.py",
+            "args": [
+                "--lat", "48.786839",
+                "--lon", "2.49813",
+                "--days", "5",
+                "--json",
+                "--verbose"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+            "justMyCode": true
+        },
+        {
+            "name": "Debug ISS Transits - Custom Location",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/iss_transits.py",
+            "args": [
+                "--lat", "${input:latitude}",
+                "--lon", "${input:longitude}",
+                "--elev", "${input:elevation}",
+                "--days", "7",
+                "--verbose"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+            "justMyCode": true
+        },
+        {
+            "name": "Run ISS Transits (No Debug)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/iss_transits.py",
+            "args": [
+                "--lat", "48.8566",
+                "--lon", "2.3522",
+                "--elev", "35",
+                "--days", "7"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+            "justMyCode": false
+        }
+    ],
+    "inputs": [
+        {
+            "id": "latitude",
+            "description": "Enter latitude (degrees, positive north)",
+            "default": "48.8566",
+            "type": "promptString"
+        },
+        {
+            "id": "longitude",
+            "description": "Enter longitude (degrees, positive east)",
+            "default": "2.3522",
+            "type": "promptString"
+        },
+        {
+            "id": "elevation",
+            "description": "Enter elevation (meters above sea level)",
+            "default": "35",
+            "type": "promptString"
+        }
+    ]
+}

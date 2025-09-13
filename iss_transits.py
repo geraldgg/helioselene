@@ -253,17 +253,25 @@ def compute_events(
     fine_step_s: float = DEFAULT_FINE_STEP_S,
     refine_window_s: float = DEFAULT_REFINEMENT_WINDOW_S,
     near_margin_deg: float = DEFAULT_NEAR_MARGIN_DEG,
-    max_distance_km: float = 0.0,
+    max_distance_km: float = 1.0,
     grid_step_km: float = 2.0,
     grid_elev_mode: str = "base",
     workers: int | None = None,
     verbose: bool = False,
     satellites: list = None,
+    start_utc: str = None,  # Accept start_utc as a parameter
 ) -> List[Event]:
     script_start = time.time()
     if satellites is None:
         satellites = [(ISS_NAME, CELESTRAK_TLE_URL_ISS)]
     
+    _log(verbose, f"Starting prediction with parameters:")
+    _log(verbose, f"  Location: lat={lat}, lon={lon}, elev={elev_m}m")
+    _log(verbose, f"  Search window: {days} days")
+    _log(verbose, f"  Alt min: {alt_min_deg}°, near margin: {near_margin_deg}°")
+    _log(verbose, f"  Steps: coarse={coarse_step_s}s, fine={fine_step_s}s")
+    _log(verbose, f"  Satellites: {[name for name, _ in satellites]}")
+
     # Load ephemerides and timescale
     eph_start = time.time()
     _log(verbose, f"Loading ephemerides and timescale ...")
@@ -293,17 +301,66 @@ def compute_events(
             name, l1, l2 = fut.result()
             sats.append((name, EarthSatellite(l1, l2, name, ts)))
             _log(verbose, f"Created satellite object for {name}")
-    
+            _log(verbose, f"  TLE Line 1: {l1}")
+            _log(verbose, f"  TLE Line 2: {l2}")
+
     # Sort satellites by name for consistent ordering
     sats.sort(key=lambda x: x[0])
     tle_elapsed = time.time() - tle_start
     _log_timing(verbose, f"TLE fetching and satellite creation completed", tle_elapsed)
 
+    # --- BEGIN: Debug ECEF and altitude math for cross-check with Rust ---
+    def observer_ecef(lat_deg, lon_deg, alt_m):
+        # WGS-84
+        a = 6378.137
+        f = 1.0 / 298.257_223_563
+        e2 = f * (2.0 - f)
+        lat = np.radians(lat_deg)
+        lon = np.radians(lon_deg)
+        sin_lat = np.sin(lat)
+        cos_lat = np.cos(lat)
+        n = a / np.sqrt(1.0 - e2 * sin_lat * sin_lat)
+        alt_km = alt_m / 1000.0
+        x = (n + alt_km) * cos_lat * np.cos(lon)
+        y = (n + alt_km) * cos_lat * np.sin(lon)
+        z = (n * (1.0 - e2) + alt_km) * sin_lat
+        return x, y, z
+    ox, oy, oz = observer_ecef(lat, lon, elev_m)
+    _log(verbose, f"[DEBUG] Observer ECEF: x={ox:.3f}, y={oy:.3f}, z={oz:.3f} km")
+
+    debug_time = datetime(2025, 9, 13, 20, 0, 0, tzinfo=timezone.utc)
+    ts_debug = ts.from_datetime(debug_time)
+    sat = sats[0][1]
+    # Log TEME/ECI position (Skyfield's .position.km is TEME/ECI)
+    sat_teme = sat.at(ts_debug).position.km
+    _log(verbose, f"[DEBUG] Sat TEME/ECI at {debug_time}: x={sat_teme[0]:.3f}, y={sat_teme[1]:.3f}, z={sat_teme[2]:.3f} km")
+    # Log ECEF position if available (Skyfield's .frame_xyz(eph) gives ITRF/ECEF)
+    try:
+        sat_ecef = sat.at(ts_debug).frame_xyz(eph)
+        _log(verbose, f"[DEBUG] Sat ECEF (ITRF) at {debug_time}: x={sat_ecef[0][0]:.3f}, y={sat_ecef[1][0]:.3f}, z={sat_ecef[2][0]:.3f} km")
+    except Exception as e:
+        _log(verbose, f"[DEBUG] Sat ECEF (ITRF) at {debug_time}: not available ({e})")
+    # Log GMST using Skyfield's API if available
+    try:
+        gmst = ts_debug.gmst
+        _log(verbose, f"[DEBUG] GMST at {debug_time}: {gmst:.6f} hours ({gmst*15:.6f} deg)")
+    except Exception as e:
+        _log(verbose, f"[DEBUG] GMST at {debug_time}: not available ({e})")
+    # ...existing code...
     # Build time grid - optimized for fewer allocations
     grid_start = time.time()
-    t0 = datetime.now(timezone.utc)
+    # Accept start_utc as a parameter to compute_events
+    t0 = None
+    if 'start_utc' in locals() and start_utc is not None:
+        t0 = datetime.fromisoformat(start_utc.replace('Z', '+00:00'))
+    elif hasattr(compute_events, 'start_utc') and compute_events.start_utc is not None:
+        t0 = datetime.fromisoformat(compute_events.start_utc.replace('Z', '+00:00'))
+    else:
+        t0 = datetime.now(timezone.utc)
     t1 = t0 + timedelta(days=days)
     n_steps = int(((t1 - t0).total_seconds() // coarse_step_s) + 1)
+    _log(verbose, f"Time window: {t0} to {t1}")
+    _log(verbose, f"Search duration: {(t1-t0).days} days ({(t1-t0).total_seconds():.0f} seconds)")
     _log(verbose, f"Building time grid: {n_steps} samples over {days} days (step {coarse_step_s}s)")
     
     # More efficient time array creation
@@ -331,19 +388,40 @@ def compute_events(
         sat_computation_elapsed = time.time() - sat_computation_start
         _log_timing(verbose, f"{sat_name} altitude computation", sat_computation_elapsed)
         
+        # Log some altitude samples
+        _log(verbose, f"{sat_name} altitude samples:")
+        for i in range(0, min(len(alt_degrees), 10)):
+            _log(verbose, f"  t={times[i].utc_datetime()}: alt={alt_degrees[i]:.1f}°")
+
         interval_start = time.time()
         intervals = find_pass_intervals(alt_degrees, times, alt_min_deg)
         interval_elapsed = time.time() - interval_start
         _log_timing(verbose, f"{sat_name} pass interval detection", interval_elapsed)
         _log(verbose, f"Found {len(intervals)} visible {sat_name} pass interval(s) above {alt_min_deg}°")
 
-        for i0, i1 in intervals:
+        if not intervals:
+            _log(verbose, f"WARNING: No {sat_name} passes found above {alt_min_deg}°")
+            _log(verbose, f"  Max altitude during period: {np.max(alt_degrees):.1f}°")
+            _log(verbose, f"  This might indicate:")
+            _log(verbose, f"    - Satellite not visible from this location")
+            _log(verbose, f"    - TLE data might be outdated")
+            _log(verbose, f"    - Time window or location issues")
+            continue
+
+        for interval_idx, (i0, i1) in enumerate(intervals):
+            pass_start_time = times[i0].utc_datetime()
+            pass_end_time = times[i1].utc_datetime()
+            pass_duration = (pass_end_time - pass_start_time).total_seconds()
+            #_log(verbose, f"Pass {interval_idx+1}/{len(intervals)}: {pass_start_time} to {pass_end_time} ({pass_duration:.0f}s)")
+
             t_segment = times[i0:i1 + 1]
 
-            def make_job(sat_name=sat_name, sat=sat, t_segment=t_segment):
+            def make_job(sat_name=sat_name, sat=sat, t_segment=t_segment, pass_idx=interval_idx):
                 def _run_pass():
                     pass_start = time.time()
                     local_events: List[Event] = []
+                    #_log(verbose, f"Processing {sat_name} pass {pass_idx+1}/{len(intervals)} with {len(t_segment)} time points")
+
                     # Compute Sun/Moon positions only for this time segment (more efficient than pre-computing all)
                     obs_start = time.time()
                     obs = eph['earth'] + observer
@@ -357,6 +435,12 @@ def compute_events(
                     sep_moon = angle_between(sat_vec, moon_vec_seg)
                     angle_elapsed = time.time() - angle_start
 
+                    # Log some separation samples
+                    #_log(verbose, f"Separation samples for {sat_name} pass {pass_idx+1}:")
+                    sample_indices = np.linspace(0, len(sep_sun)-1, min(5, len(sep_sun)), dtype=int)
+                    for i in sample_indices:
+                        _log(verbose, f"  t={t_segment[i].utc_datetime()}: sun_sep={np.degrees(sep_sun[i]):.2f}°, moon_sep={np.degrees(sep_moon[i]):.2f}°")
+
                     # Initialize timing variables to avoid UnboundLocalError
                     total_refine_elapsed = 0.0
                     total_speed_elapsed = 0.0
@@ -368,6 +452,8 @@ def compute_events(
                         min_sep_rad = float(sep_arr[j_min])
                         min_sep_deg = math.degrees(min_sep_rad)
                         
+                        _log(verbose, f"{sat_name} vs {body}: min_separation={min_sep_deg:.3f}° at t={t_segment[j_min].utc_datetime()}")
+
                         # Rough radius estimate for quick filtering (assume ~400km satellite distance)
                         if body == 'Sun':
                             rough_radius_deg = math.degrees(math.atan(SUN_RADIUS_KM / 150_000_000))  # ~0.53 deg
@@ -376,10 +462,15 @@ def compute_events(
                             rough_radius_deg = math.degrees(math.atan(MOON_RADIUS_KM / 384_400))  # ~0.26 deg  
                             max_interesting_sep = rough_radius_deg + near_margin_deg + 2.0  # +2° buffer
                         
+                        _log(verbose, f"{body} rough_radius={rough_radius_deg:.3f}°, max_interesting={max_interesting_sep:.3f}°")
+
                         # Skip refinement if clearly too far away
                         if min_sep_deg > max_interesting_sep:
+                            _log(verbose, f"{body} separation too large ({min_sep_deg:.3f}° > {max_interesting_sep:.3f}°), skipping")
                             continue
                         
+                        _log(verbose, f"INTERESTING: {sat_name} vs {body} separation {min_sep_deg:.3f}° <= {max_interesting_sep:.3f}°, refining...")
+
                         refine_start = time.time()
                         t_center = t_segment[j_min]
                         t_min, sep_min_deg, tgt_rad_deg, sat_alt_deg, tgt_alt_deg = refine_minimum(
@@ -389,6 +480,8 @@ def compute_events(
                         total_refine_elapsed += refine_elapsed
                         sat_range_km = getattr(refine_minimum, 'iss_range_km', None)
                         
+                        _log(verbose, f"REFINED: {sat_name} vs {body} at {t_min}: sep={sep_min_deg:.3f}°, radius={tgt_rad_deg:.3f}°, sat_alt={sat_alt_deg:.1f}°, body_alt={tgt_alt_deg:.1f}°")
+
                         # Quick classification to avoid expensive speed calculation if not needed
                         if sep_min_deg <= tgt_rad_deg:
                             kind = "transit"
@@ -403,6 +496,11 @@ def compute_events(
                             if required_km <= max_distance_km and tgt_alt_deg >= 0 and sat_alt_deg >= alt_min_deg:
                                 kind = "reachable"
                         
+                        if kind:
+                            _log(verbose, f"EVENT CLASSIFIED: {kind} (sep={sep_min_deg:.3f}°, radius={tgt_rad_deg:.3f}°, margin={near_margin_deg:.3f}°)")
+                        else:
+                            _log(verbose, f"Event rejected after classification: sep={sep_min_deg:.3f}° > limit={tgt_rad_deg + near_margin_deg:.3f}°")
+
                         speed_elapsed = 0.0  # Initialize to avoid UnboundLocalError
                         # Only compute expensive speed/duration if we have a valid event
                         if kind and tgt_alt_deg >= 0 and sat_alt_deg >= alt_min_deg:
@@ -443,11 +541,15 @@ def compute_events(
                                 ev.duration_s = 2.0 * tgt_rad_deg / speed_deg_per_s
                             if kind == "reachable" and sat_range_km is not None:
                                 ev.distance_km = round(math.radians(sep_min_deg) * float(sat_range_km), 3)
+
+                            _log(verbose, f"EVENT CREATED: {kind} {sat_name} {body} at {t_min}: sep={ev.separation_deg:.3f}°, duration={ev.duration_s or 0:.1f}s")
                             local_events.append(ev)
                     
                     pass_elapsed = time.time() - pass_start
                     if verbose and pass_elapsed > 0.1:  # Only log slow passes
                         print(f"    Pass timing: obs={obs_elapsed:.3f}s, angles={angle_elapsed:.3f}s, refine={total_refine_elapsed:.3f}s, speed={total_speed_elapsed:.3f}s, total={pass_elapsed:.3f}s", flush=True)
+
+                    _log(verbose, f"Pass {pass_idx+1} completed: found {len(local_events)} events")
                     return local_events
                 return _run_pass
             jobs.append(make_job())
@@ -466,13 +568,14 @@ def compute_events(
         last_progress_time = time.time()
         for fut in concurrent.futures.as_completed(futures):
             completed += 1
+            job_events = fut.result()
+            events.extend(job_events)
             if verbose and completed % max(1, len(jobs)//10) == 0:
                 current_time = time.time()
                 batch_time = current_time - last_progress_time
                 rate = (len(jobs)//10) / batch_time if batch_time > 0 else 0
-                print(f"  Progress: {completed}/{len(jobs)} passes refined ({rate:.1f} passes/s)", flush=True)
+                print(f"  Progress: {completed}/{len(jobs)} passes refined ({rate:.1f} passes/s), total events: {len(events)}", flush=True)
                 last_progress_time = current_time
-            events.extend(fut.result())
 
     refinement_elapsed = time.time() - refinement_start
     _log_timing(verbose, f"Pass refinement completed ({len(events)} events found)", refinement_elapsed)
@@ -483,6 +586,10 @@ def compute_events(
     sort_elapsed = time.time() - sort_start
     _log_timing(verbose, "Event sorting completed", sort_elapsed)
 
+    _log(verbose, f"FINAL RESULT: Found {len(events)} total events")
+    for i, ev in enumerate(events):
+        _log(verbose, f"Event {i+1}: {ev.kind} {ev.sat_name} {ev.body} at {ev.dt_utc}: sep={ev.separation_deg:.3f}°")
+
     # If fast radius mode, skip grid and return
     if max_distance_km > 0:
         _log(verbose, "Fast radius check enabled; skipping grid search")
@@ -490,116 +597,7 @@ def compute_events(
         _log_timing(verbose, "TOTAL SCRIPT TIME", script_elapsed)
         return events
 
-    # Build search grid (if requested)
-    grid_build_start = time.time()
-    if max_distance_km <= 0:
-        search_points = [(lat, lon, elev_m, 0.0)]
-        _log(verbose, "Grid search disabled; using only base location")
-    else:
-        search_points = []
-        n_steps_radial = int(max_distance_km // grid_step_km) + 1
-        cos_lat = math.cos(math.radians(lat))
-        for d in range(n_steps_radial + 1):
-            r = d * grid_step_km
-            n_theta = max(8, int(2 * math.pi * max(r, grid_step_km) / grid_step_km)) if r > 0 else 1
-            for k in range(n_theta):
-                theta = 2 * math.pi * k / n_theta
-                dlat = (r / 111.32) * math.cos(theta)
-                dlon = 0 if cos_lat == 0 else (r / (111.32 * cos_lat)) * math.sin(theta)
-                plat = lat + dlat
-                plon = lon + dlon
-                if grid_elev_mode == "lookup" and r > 0:
-                    pelev = get_elevation(round(plat, 5), round(plon, 5))
-                else:
-                    pelev = elev_m
-                search_points.append((plat, plon, pelev, r))
-        _log(verbose, f"Built grid with {len(search_points)} points within {max_distance_km} km (step {grid_step_km} km, elev mode {grid_elev_mode})")
-    
-    grid_build_elapsed = time.time() - grid_build_start
-    _log_timing(verbose, f"Grid construction completed ({len(search_points)} points)", grid_build_elapsed)
-
-    # Evaluate grid
-    def evaluate_point(plat, plon, pelev, pdist, t_segment):
-        local_best = {}
-        observer_p = wgs84.latlon(latitude_degrees=plat, longitude_degrees=plon, elevation_m=pelev)
-        obs_p = eph['earth'] + observer_p
-        sun_vec_p = obs_p.at(t_segment).observe(eph['sun']).position.km.T
-        moon_vec_p = obs_p.at(t_segment).observe(eph['moon']).position.km.T
-        iss_vec_p = (sat - observer_p).at(t_segment).position.km.T
-        sep_sun_p = angle_between(iss_vec_p, sun_vec_p)
-        sep_moon_p = angle_between(iss_vec_p, moon_vec_p)
-        for body, sep_arr in (("Sun", sep_sun_p), ("Moon", sep_moon_p)):
-            j_min = int(np.argmin(sep_arr))
-            t_center = t_segment[j_min]
-            t_min, sep_min_deg, tgt_rad_deg, iss_alt_deg, tgt_alt_deg = refine_minimum(
-                ts, sat, eph, observer_p, t_center, refine_window_s, fine_step_s, body
-            )
-            if sep_min_deg <= tgt_rad_deg:
-                kind = "transit"
-            elif sep_min_deg <= (tgt_rad_deg + near_margin_deg):
-                kind = "near"
-            else:
-                continue
-            if tgt_alt_deg < 0 or iss_alt_deg < alt_min_deg:
-                continue
-            key = (t_min, body, kind)
-            if key not in local_best or pdist < local_best[key]["distance_km"]:
-                local_best[key] = {
-                    "event": Event(
-                        dt_utc=t_min,
-                        body=body,
-                        separation_deg=sep_min_deg,
-                        target_radius_deg=tgt_rad_deg,
-                        kind=kind,
-                        iss_alt_deg=iss_alt_deg,
-                        target_alt_deg=tgt_alt_deg,
-                    ),
-                    "lat": plat,
-                    "lon": plon,
-                    "elev": pelev,
-                    "distance_km": pdist,
-                }
-        return local_best
-
-    grid_events: List[Event] = []
-    grid_eval_start = time.time()
-    for idx, (i0, i1) in enumerate(intervals, start=1):
-        t_segment = times[i0:i1 + 1]
-        _log(verbose, f"Evaluating grid for pass {idx}/{len(intervals)} across {len(search_points)} points ...")
-        bests = {}
-        completed = 0
-        with concurrent.futures.ThreadPoolExecutor(max_workers=(None if not workers or workers <= 0 else workers)) as ex:
-            futures = [ex.submit(evaluate_point, plat, plon, pelev, pdist, t_segment) for (plat, plon, pelev, pdist) in search_points]
-            for fut in concurrent.futures.as_completed(futures):
-                completed += 1
-                if verbose and completed % max(1, len(search_points)//10) == 0:
-                    print(f"  Grid progress: {completed}/{len(search_points)} points", flush=True)
-                local_best = fut.result()
-                for key, val in local_best.items():
-                    if key not in bests or val["distance_km"] < bests[key]["distance_km"]:
-                        bests[key] = val
-        for v in bests.values():
-            e = v["event"]
-            e.lat = v["lat"]
-            e.lon = v["lon"]
-            e.elev = v["elev"]
-            e.distance_km = v["distance_km"]
-            grid_events.append(e)
-        _log(verbose, f"  Found {len(bests)} grid event(s) for this pass")
-
-    grid_eval_elapsed = time.time() - grid_eval_start
-    _log_timing(verbose, f"Grid evaluation completed ({len(grid_events)} grid events)", grid_eval_elapsed)
-
-    # Merge grid events (they include base if grid disabled)
-    final_sort_start = time.time()
-    grid_events.sort(key=lambda e: e.dt_utc)
-    final_sort_elapsed = time.time() - final_sort_start
-    _log_timing(verbose, "Final sorting completed", final_sort_elapsed)
-    
-    script_elapsed = time.time() - script_start
-    _log_timing(verbose, "TOTAL SCRIPT TIME", script_elapsed)
-    
-    return grid_events
+    return events
 
 
 def localize(dt_utc: datetime, tz_name: Optional[str]) -> datetime:
@@ -631,7 +629,8 @@ def main():
     p.add_argument("--grid-elev-mode", type=str, choices=["base", "lookup"], default="base", help="Elevation for grid points: use base elevation or lookup per point (default base)")
     p.add_argument("--workers", type=int, default=0, help="Max worker threads for grid evaluation (0=auto)")
     p.add_argument("--verbose", action="store_true", help="Print progress logs")
-    p.add_argument("--satellites", type=str, default="ISS,TIANGONG,HUBBLE", help="Comma-separated list of satellites: ISS,TIANGONG,HUBBLE or any combination (default: all three)")
+    p.add_argument("--satellites", type=str, default="ISS,TIANGONG", help="Comma-separated list of satellites: ISS,TIANGONG,HUBBLE or any combination (default: all three)")
+    p.add_argument("--start-utc", type=str, default=None, help="UTC start time for grid (e.g. 2025-09-13T19:59:00Z)")
 
     args = p.parse_args()
 
@@ -671,6 +670,7 @@ def main():
         workers=args.workers,
         verbose=args.verbose,
         satellites=sats,
+        start_utc=args.start_utc
     )
 
     if args.json:

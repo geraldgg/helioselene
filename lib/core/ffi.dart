@@ -3,8 +3,10 @@ import 'package:ffi/ffi.dart';
 import 'dart:io' show Platform;
 import 'dart:convert';
 import 'package:logging/logging.dart';
+import 'package:http/http.dart' as http;
 
 import '../models/transit.dart';
+import '../models/satellite.dart';
 
 typedef _PredictTransitsNative = ffi.Pointer<ffi.Char> Function(
   ffi.Pointer<ffi.Char>, ffi.Pointer<ffi.Char>, // tle1, tle2
@@ -92,5 +94,55 @@ class NativeCore {
       malloc.free(tle1Ptr);
       malloc.free(tle2Ptr);
     }
+  }
+
+  /// Predict transits for multiple satellites (aggregated results)
+  static Future<List<Transit>> predictTransitsForSatellites({
+    required List<Satellite> satellites,
+    required double lat,
+    required double lon,
+    required double altM,
+    required DateTime startUtc,
+    required DateTime endUtc,
+    double nearArcmin = 10.0,
+  }) async {
+    List<Transit> allResults = [];
+    for (final sat in satellites.where((s) => s.selected)) {
+      try {
+        // Fetch TLE lines from the satellite's TLE URL
+        final tleResp = await http.get(Uri.parse(sat.tleUrl));
+        if (tleResp.statusCode != 200) {
+          _logger.warning('[FFI] Failed to fetch TLE for ${sat.name}');
+          continue;
+        }
+        final lines = tleResp.body.split('\n').where((l) => l.trim().isNotEmpty).toList();
+        String? tle1, tle2;
+        if (lines.length >= 3 && !lines[0].startsWith('1 ')) {
+          tle1 = lines[1].trim();
+          tle2 = lines[2].trim();
+        } else {
+          tle1 = lines.firstWhere((l) => l.startsWith('1 '), orElse: () => '');
+          tle2 = lines.firstWhere((l) => l.startsWith('2 '), orElse: () => '');
+        }
+        if (tle1.isEmpty || tle2.isEmpty) {
+          _logger.warning('[FFI] Could not parse TLE for ${sat.name}');
+          continue;
+        }
+        final results = predictTransits(
+          tle1: tle1,
+          tle2: tle2,
+          lat: lat,
+          lon: lon,
+          altM: altM,
+          startUtc: startUtc,
+          endUtc: endUtc,
+          nearArcmin: nearArcmin,
+        );
+        allResults.addAll(results.map((t) => t.copyWith(satellite: sat.name)));
+      } catch (e, st) {
+        _logger.warning('[FFI] Exception for ${sat.name}: $e\n$st');
+      }
+    }
+    return allResults;
   }
 }
