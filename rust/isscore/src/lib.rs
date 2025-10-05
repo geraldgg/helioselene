@@ -60,7 +60,8 @@ struct Event {
     separation_arcmin: f64,
     target_radius_arcmin: f64,
     kind: String,
-    iss_alt_deg: f64,
+    sat_alt_deg: f64,
+    sat_az_deg: f64,
     target_alt_deg: f64,
     satellite: String,
     speed_deg_per_s: f64,
@@ -229,8 +230,18 @@ fn moon_position_eci(jd: f64) -> Vector3 {
 fn altaz(topo_vec: &Vector3) -> (f64, f64) {
     let range = topo_vec.norm();
     let alt_rad = (topo_vec.z / range).asin();
-    let az_rad = topo_vec.y.atan2(topo_vec.x);
-    (alt_rad.to_degrees(), az_rad.to_degrees())
+    
+    // In SEZ frame: x=South, y=East, z=Zenith
+    // Azimuth from North clockwise: az = atan2(East, North) = atan2(y, -x)
+    let az_rad = topo_vec.y.atan2(-topo_vec.x);
+    
+    // Normalize azimuth to 0-360° range
+    let mut az_deg = az_rad.to_degrees();
+    if az_deg < 0.0 {
+        az_deg += 360.0;
+    }
+    
+    (alt_rad.to_degrees(), az_deg)
 }
 
 // ============================================================================
@@ -316,11 +327,12 @@ fn refine_minimum(
     body: &str,
     window_s: f64,
     step_s: f64,
-) -> Result<(DateTime<Utc>, f64, f64, f64, f64, f64), String> {
+) -> Result<(DateTime<Utc>, f64, f64, f64, f64, f64, f64), String> {
     let n_steps = (window_s / step_s) as i64;
     let mut min_sep = f64::INFINITY;
     let mut best_time = t_center;
     let mut best_sat_alt = 0.0;
+    let mut best_sat_az = 0.0;
     let mut best_body_alt = 0.0;
     let mut best_sat_range = 0.0;
     
@@ -339,7 +351,16 @@ fn refine_minimum(
         }
     }
     
-    let (_, body_topo, _, _) = compute_topo_vectors(elements, best_time, observer_ecef, observer_lat_rad, observer_lon_rad, body)?;
+    // Get azimuth for the best time
+    let (sat_topo_best, body_topo, _, _) = compute_topo_vectors(elements, best_time, observer_ecef, observer_lat_rad, observer_lon_rad, body)?;
+    let jd_best = datetime_to_jd(best_time);
+    let gmst = gmst_rad(jd_best);
+    let rot_inv = rot_z(-gmst);
+    let sat_topo_ecef = mat_mul_vec(&rot_inv, &sat_topo_best);
+    let sat_topo_sez = ecef_to_sez(&sat_topo_ecef, observer_lat_rad, observer_lon_rad);
+    let (_, sat_az) = altaz(&sat_topo_sez);
+    best_sat_az = sat_az;
+    
     let body_distance = body_topo.norm();
     let body_radius_km = match body {
         "Sun" => SUN_RADIUS_KM,
@@ -353,6 +374,7 @@ fn refine_minimum(
         min_sep.to_degrees(),
         body_radius_rad.to_degrees(),
         best_sat_alt,
+        best_sat_az,
         best_body_alt,
         best_sat_range,
     ))
@@ -495,14 +517,28 @@ pub extern "C" fn predict_transits(
                     
                     if sep <= body_radius_deg + near_margin_deg + 2.0 {
                         match refine_minimum(&elements, t, &observer_ecef, observer_lat_rad, observer_lon_rad, body, refine_window_s, fine_step_s) {
-                            Ok((t_min, min_sep_deg, radius_deg, sat_alt_refined, body_alt_refined, sat_range)) => {
-                                let kind = if min_sep_deg <= radius_deg {
+                            Ok((t_min, min_sep_deg, radius_deg, sat_alt_refined, sat_az_refined, body_alt_refined, sat_range)) => {
+                                let mut kind = if min_sep_deg <= radius_deg {
                                     "transit"
                                 } else if min_sep_deg <= radius_deg + near_margin_deg {
                                     "near"
                                 } else {
-                                    continue;
+                                    ""
                                 };
+                                
+                                // Check if event is "reachable" (within travel distance)
+                                if kind.is_empty() && sat_range > 0.0 && max_distance_km > 0.0 {
+                                    // Calculate ground distance needed to travel to see the transit
+                                    // Using small angle approximation: arc_length ≈ angle_rad × distance
+                                    let required_travel_km = min_sep_deg.to_radians() * sat_range;
+                                    if required_travel_km <= max_distance_km && body_alt_refined >= 0.0 {
+                                        kind = "reachable";
+                                    }
+                                }
+                                
+                                if kind.is_empty() {
+                                    continue;
+                                }
                                 
                                 let speed_deg_per_s = calculate_speed_and_duration(
                                     &elements, t_min, &observer_ecef, observer_lat_rad, observer_lon_rad, body, fine_step_s
@@ -523,7 +559,8 @@ pub extern "C" fn predict_transits(
                                     separation_arcmin: min_sep_deg * 60.0,
                                     target_radius_arcmin: radius_deg * 60.0,
                                     kind: kind.to_string(),
-                                    iss_alt_deg: sat_alt_refined,
+                                    sat_alt_deg: sat_alt_refined,
+                                    sat_az_deg: sat_az_refined,
                                     target_alt_deg: body_alt_refined,
                                     satellite: "ISS (ZARYA)".to_string(),
                                     speed_deg_per_s,
