@@ -65,6 +65,13 @@ HUBBLE_NAME = "HUBBLE SPACE TELESCOPE"
 SUN_RADIUS_KM = 696_340.0
 MOON_RADIUS_KM = 1_737.4
 
+# Satellite dimensions (approximate maximum dimensions in meters)
+SATELLITE_DIMENSIONS = {
+    "ISS (ZARYA)": 108.0,  # ISS span ~108m
+    "TIANGONG": 16.6,      # Tiangong core module ~16.6m length
+    "HUBBLE SPACE TELESCOPE": 13.2,  # HST ~13.2m length
+}
+
 # Default parameters
 DEFAULT_DAYS = 10
 DEFAULT_COARSE_STEP_S = 20.0
@@ -102,13 +109,15 @@ class Event:
     sat_name: str = None  # Added satellite name
     speed_deg_per_s: float = None  # Apparent angular speed at closest approach (deg/s)
     duration_s: float = None       # Estimated transit duration when in front of disc (s)
+    sat_angular_size_arcsec: float = None  # Satellite angular size in arc seconds
+    sat_distance_km: float = None   # Distance to satellite in kilometers
 
     def to_dict(self):
         d = {
             "time_utc": self.dt_utc.isoformat().replace("+00:00", "Z"),
             "body": self.body,
-            "separation_deg": round(self.separation_deg, 6),
-            "target_radius_deg": round(self.target_radius_deg, 6),
+            "separation_arcmin": round(self.separation_deg * 60.0, 1),
+            "target_radius_arcmin": round(self.target_radius_deg * 60.0, 1),
             "kind": self.kind,
             "iss_alt_deg": round(self.iss_alt_deg, 3),
             "target_alt_deg": round(self.target_alt_deg, 3),
@@ -122,14 +131,50 @@ class Event:
             d["satellite"] = self.sat_name
         if self.speed_deg_per_s is not None:
             d["speed_deg_per_s"] = round(self.speed_deg_per_s, 6)
+            d["speed_arcmin_per_s"] = round(self.speed_deg_per_s * 60.0, 2)
         if self.duration_s is not None:
             d["duration_s"] = round(self.duration_s, 3)
+        if self.sat_angular_size_arcsec is not None:
+            d["sat_angular_size_arcsec"] = round(self.sat_angular_size_arcsec, 2)
+        if self.sat_distance_km is not None:
+            d["sat_distance_km"] = round(self.sat_distance_km, 2)
         return d
 
 
 def angular_radius_deg(physical_radius_km: float, distance_km) -> float | np.ndarray:
     # Support scalar or numpy array distances; compute arcsin(R/d) in degrees
     return np.degrees(np.arcsin(np.minimum(1.0, physical_radius_km / np.asarray(distance_km))))
+
+
+def satellite_angular_size_arcsec(sat_dimension_m: float, distance_km: float) -> float:
+    """Calculate satellite angular size in arc seconds.
+    Uses arctan approximation for small angles: θ ≈ tan(θ) = size/distance
+    """
+    if distance_km <= 0:
+        return 0.0
+    size_km = sat_dimension_m / 1000.0  # Convert to km
+    angular_size_rad = size_km / distance_km  # Small angle approximation
+    return math.degrees(angular_size_rad) * 3600.0  # Convert to arc seconds
+
+
+def calculate_transit_duration(separation_deg: float, target_radius_deg: float, speed_deg_per_s: float) -> float:
+    """Calculate transit duration in seconds.
+    For a satellite crossing a circular disc, the chord length depends on the closest approach distance.
+    Duration = chord_length / speed
+    """
+    if speed_deg_per_s <= 0 or separation_deg > target_radius_deg:
+        return 0.0
+    
+    # For a circle of radius R and closest approach distance d, 
+    # the chord length is 2 * sqrt(R² - d²)
+    r_sq = target_radius_deg ** 2
+    d_sq = separation_deg ** 2
+    
+    if d_sq >= r_sq:
+        return 0.0  # No intersection
+    
+    chord_length_deg = 2.0 * math.sqrt(r_sq - d_sq)
+    return chord_length_deg / speed_deg_per_s
 
 
 def angle_between(u: np.ndarray, v: np.ndarray) -> float:
@@ -310,6 +355,10 @@ def compute_events(
     _log_timing(verbose, f"TLE fetching and satellite creation completed", tle_elapsed)
 
     # --- BEGIN: Debug ECEF and altitude math for cross-check with Rust ---
+    # Log Earth constants for diagnostics
+    a = 6378.137
+    f = 1.0 / 298.257_223_563
+    _log(verbose, f"[DEBUG] Earth constants: radius_km={a:.6f}, flattening={f:.10f}")
     def observer_ecef(lat_deg, lon_deg, alt_m):
         # WGS-84
         a = 6378.137
@@ -328,9 +377,10 @@ def compute_events(
     ox, oy, oz = observer_ecef(lat, lon, elev_m)
     _log(verbose, f"[DEBUG] Observer ECEF: x={ox:.3f}, y={oy:.3f}, z={oz:.3f} km")
 
-    debug_time = datetime(2025, 9, 13, 20, 0, 0, tzinfo=timezone.utc)
+    debug_time = datetime(2025, 9, 20, 3, 40, 0, tzinfo=timezone.utc)
     ts_debug = ts.from_datetime(debug_time)
     sat = sats[0][1]
+
     # Log TEME/ECI position (Skyfield's .position.km is TEME/ECI)
     sat_teme = sat.at(ts_debug).position.km
     _log(verbose, f"[DEBUG] Sat TEME/ECI at {debug_time}: x={sat_teme[0]:.3f}, y={sat_teme[1]:.3f}, z={sat_teme[2]:.3f} km")
@@ -346,15 +396,24 @@ def compute_events(
         _log(verbose, f"[DEBUG] GMST at {debug_time}: {gmst:.6f} hours ({gmst*15:.6f} deg)")
     except Exception as e:
         _log(verbose, f"[DEBUG] GMST at {debug_time}: not available ({e})")
+    # Log TEME/ECI position at TLE epoch
+    tle_epoch_str = l1[18:32].strip()
+    tle_year = int(l1[18:20])
+    tle_year = 2000 + tle_year if tle_year < 57 else 1900 + tle_year
+    tle_doy = float(l1[20:32])
+    tle_epoch_dt = datetime(tle_year, 1, 1, tzinfo=timezone.utc) + timedelta(days=tle_doy - 1)
+    ts_tle_epoch = ts.from_datetime(tle_epoch_dt)
+    sat_teme_epoch = sat.at(ts_tle_epoch).position.km
+    _log(verbose, f"[DEBUG] TLE epoch: {tle_epoch_dt.isoformat()} (parsed from TLE: year={tle_year}, doy={tle_doy})")
+    _log(verbose, f"[DEBUG] Sat TEME/ECI at TLE epoch {tle_epoch_dt}: x={sat_teme_epoch[0]:.3f}, y={sat_teme_epoch[1]:.3f}, z={sat_teme_epoch[2]:.3f} km")
+    # Log minutes since TLE epoch for debug_time
+    minutes_since_epoch = (debug_time - tle_epoch_dt).total_seconds() / 60.0
+    _log(verbose, f"[DEBUG] Minutes since TLE epoch for {debug_time}: {minutes_since_epoch:.6f} min")
     # ...existing code...
     # Build time grid - optimized for fewer allocations
     grid_start = time.time()
-    # Accept start_utc as a parameter to compute_events
-    t0 = None
-    if 'start_utc' in locals() and start_utc is not None:
+    if start_utc is not None:
         t0 = datetime.fromisoformat(start_utc.replace('Z', '+00:00'))
-    elif hasattr(compute_events, 'start_utc') and compute_events.start_utc is not None:
-        t0 = datetime.fromisoformat(compute_events.start_utc.replace('Z', '+00:00'))
     else:
         t0 = datetime.now(timezone.utc)
     t1 = t0 + timedelta(days=days)
@@ -390,8 +449,9 @@ def compute_events(
         
         # Log some altitude samples
         _log(verbose, f"{sat_name} altitude samples:")
-        for i in range(0, min(len(alt_degrees), 10)):
-            _log(verbose, f"  t={times[i].utc_datetime()}: alt={alt_degrees[i]:.1f}°")
+        for i in range(0, len(alt_degrees)):
+            if alt_degrees[i] >= alt_min_deg:
+                _log(verbose, f"  t={times[i].utc_datetime()}: alt={alt_degrees[i]:.1f}°")
 
         interval_start = time.time()
         intervals = find_pass_intervals(alt_degrees, times, alt_min_deg)
@@ -412,12 +472,13 @@ def compute_events(
             pass_start_time = times[i0].utc_datetime()
             pass_end_time = times[i1].utc_datetime()
             pass_duration = (pass_end_time - pass_start_time).total_seconds()
-            #_log(verbose, f"Pass {interval_idx+1}/{len(intervals)}: {pass_start_time} to {pass_end_time} ({pass_duration:.0f}s)")
+            _log(verbose, f"Pass {interval_idx+1}/{len(intervals)}: {pass_start_time} to {pass_end_time} ({pass_duration:.0f}s)")
 
             t_segment = times[i0:i1 + 1]
 
             def make_job(sat_name=sat_name, sat=sat, t_segment=t_segment, pass_idx=interval_idx):
                 def _run_pass():
+                    log_pass = False
                     pass_start = time.time()
                     local_events: List[Event] = []
                     #_log(verbose, f"Processing {sat_name} pass {pass_idx+1}/{len(intervals)} with {len(t_segment)} time points")
@@ -436,10 +497,11 @@ def compute_events(
                     angle_elapsed = time.time() - angle_start
 
                     # Log some separation samples
-                    #_log(verbose, f"Separation samples for {sat_name} pass {pass_idx+1}:")
-                    sample_indices = np.linspace(0, len(sep_sun)-1, min(5, len(sep_sun)), dtype=int)
-                    for i in sample_indices:
-                        _log(verbose, f"  t={t_segment[i].utc_datetime()}: sun_sep={np.degrees(sep_sun[i]):.2f}°, moon_sep={np.degrees(sep_moon[i]):.2f}°")
+                    if log_pass:
+                        _log(verbose, f"Separation samples for {sat_name} pass {pass_idx+1}:")
+                        sample_indices = np.linspace(0, len(sep_sun)-1, min(5, len(sep_sun)), dtype=int)
+                        for i in sample_indices:
+                            _log(verbose, f"  t={t_segment[i].utc_datetime()}: sun_sep={np.degrees(sep_sun[i]):.2f}°, moon_sep={np.degrees(sep_moon[i]):.2f}°")
 
                     # Initialize timing variables to avoid UnboundLocalError
                     total_refine_elapsed = 0.0
@@ -452,7 +514,8 @@ def compute_events(
                         min_sep_rad = float(sep_arr[j_min])
                         min_sep_deg = math.degrees(min_sep_rad)
                         
-                        _log(verbose, f"{sat_name} vs {body}: min_separation={min_sep_deg:.3f}° at t={t_segment[j_min].utc_datetime()}")
+                        if log_pass:
+                            _log(verbose, f"{sat_name} vs {body}: min_separation={min_sep_deg:.3f}° at t={t_segment[j_min].utc_datetime()}")
 
                         # Rough radius estimate for quick filtering (assume ~400km satellite distance)
                         if body == 'Sun':
@@ -462,14 +525,17 @@ def compute_events(
                             rough_radius_deg = math.degrees(math.atan(MOON_RADIUS_KM / 384_400))  # ~0.26 deg  
                             max_interesting_sep = rough_radius_deg + near_margin_deg + 2.0  # +2° buffer
                         
-                        _log(verbose, f"{body} rough_radius={rough_radius_deg:.3f}°, max_interesting={max_interesting_sep:.3f}°")
+                        if log_pass:
+                            _log(verbose, f"{body} rough_radius={rough_radius_deg:.3f}°, max_interesting={max_interesting_sep:.3f}°")
 
                         # Skip refinement if clearly too far away
                         if min_sep_deg > max_interesting_sep:
-                            _log(verbose, f"{body} separation too large ({min_sep_deg:.3f}° > {max_interesting_sep:.3f}°), skipping")
+                            if log_pass:
+                                _log(verbose, f"{body} separation too large ({min_sep_deg:.3f}° > {max_interesting_sep:.3f}°), skipping")
                             continue
                         
-                        _log(verbose, f"INTERESTING: {sat_name} vs {body} separation {min_sep_deg:.3f}° <= {max_interesting_sep:.3f}°, refining...")
+                        if log_pass:
+                            _log(verbose, f"INTERESTING: {sat_name} vs {body} separation {min_sep_deg:.3f}° <= {max_interesting_sep:.3f}°, refining...")
 
                         refine_start = time.time()
                         t_center = t_segment[j_min]
@@ -480,7 +546,8 @@ def compute_events(
                         total_refine_elapsed += refine_elapsed
                         sat_range_km = getattr(refine_minimum, 'iss_range_km', None)
                         
-                        _log(verbose, f"REFINED: {sat_name} vs {body} at {t_min}: sep={sep_min_deg:.3f}°, radius={tgt_rad_deg:.3f}°, sat_alt={sat_alt_deg:.1f}°, body_alt={tgt_alt_deg:.1f}°")
+                        if log_pass:
+                            _log(verbose, f"REFINED: {sat_name} vs {body} at {t_min}: sep={sep_min_deg:.3f}°, radius={tgt_rad_deg:.3f}°, sat_alt={sat_alt_deg:.1f}°, body_alt={tgt_alt_deg:.1f}°")
 
                         # Quick classification to avoid expensive speed calculation if not needed
                         if sep_min_deg <= tgt_rad_deg:
@@ -496,34 +563,65 @@ def compute_events(
                             if required_km <= max_distance_km and tgt_alt_deg >= 0 and sat_alt_deg >= alt_min_deg:
                                 kind = "reachable"
                         
-                        if kind:
-                            _log(verbose, f"EVENT CLASSIFIED: {kind} (sep={sep_min_deg:.3f}°, radius={tgt_rad_deg:.3f}°, margin={near_margin_deg:.3f}°)")
-                        else:
-                            _log(verbose, f"Event rejected after classification: sep={sep_min_deg:.3f}° > limit={tgt_rad_deg + near_margin_deg:.3f}°")
+                        if log_pass:
+                            if kind:
+                                _log(verbose, f"EVENT CLASSIFIED: {kind} (sep={sep_min_deg:.3f}°, radius={tgt_rad_deg:.3f}°, margin={near_margin_deg:.3f}°)")
+                            else:
+                                _log(verbose, f"Event rejected after classification: sep={sep_min_deg:.3f}° > limit={tgt_rad_deg + near_margin_deg:.3f}°")
 
                         speed_elapsed = 0.0  # Initialize to avoid UnboundLocalError
                         # Only compute expensive speed/duration if we have a valid event
                         if kind and tgt_alt_deg >= 0 and sat_alt_deg >= alt_min_deg:
                             speed_start = time.time()
-                            # Estimate instantaneous angular speed around t_min using central difference
+                            # Calculate satellite angular speed in observer's sky (not relative to target)
                             t_minus = ts.from_datetimes([t_min - timedelta(seconds=fine_step_s)])
                             t_plus = ts.from_datetimes([t_min + timedelta(seconds=fine_step_s)])
-                            # Positions at t_minus/t_plus
-                            sat_vec_m = (sat - observer).at(t_minus).position.km.T[0]
-                            sat_vec_p = (sat - observer).at(t_plus).position.km.T[0]
-                            if body == 'Sun':
-                                b = eph['sun']
-                            else:
-                                b = eph['moon']
-                            obs_e = eph['earth'] + observer
-                            body_vec_m = obs_e.at(t_minus).observe(b).position.km.T[0]
-                            body_vec_p = obs_e.at(t_plus).observe(b).position.km.T[0]
-                            sep_m = float(angle_between(sat_vec_m, body_vec_m))
-                            sep_p = float(angle_between(sat_vec_p, body_vec_p))
-                            speed_rad_per_s = (sep_p - sep_m) / (2.0 * fine_step_s)
-                            speed_deg_per_s = abs(math.degrees(speed_rad_per_s))
+                            
+                            # Get satellite positions in topocentric coordinates
+                            sat_topo_m = (sat - observer).at(t_minus)
+                            sat_topo_p = (sat - observer).at(t_plus)
+                            
+                            # Get altitude/azimuth at both times
+                            alt_m, az_m, _ = sat_topo_m.altaz()
+                            alt_p, az_p, _ = sat_topo_p.altaz()
+                            
+                            # Calculate angular distance moved in the sky
+                            # Convert to cartesian on unit sphere and use angle_between
+                            alt_m_rad = math.radians(float(alt_m.degrees))
+                            az_m_rad = math.radians(float(az_m.degrees))
+                            alt_p_rad = math.radians(float(alt_p.degrees))
+                            az_p_rad = math.radians(float(az_p.degrees))
+                            
+                            # Unit vectors on celestial sphere
+                            vec_m = np.array([
+                                math.cos(alt_m_rad) * math.cos(az_m_rad),
+                                math.cos(alt_m_rad) * math.sin(az_m_rad),
+                                math.sin(alt_m_rad)
+                            ])
+                            vec_p = np.array([
+                                math.cos(alt_p_rad) * math.cos(az_p_rad),
+                                math.cos(alt_p_rad) * math.sin(az_p_rad),
+                                math.sin(alt_p_rad)
+                            ])
+                            
+                            # Angular distance traveled
+                            angular_distance_rad = float(angle_between(vec_m.reshape(1, 3), vec_p.reshape(1, 3)))
+                            speed_rad_per_s = angular_distance_rad / (2.0 * fine_step_s)
+                            speed_deg_per_s = math.degrees(speed_rad_per_s)
+                            
+                            # Debug: log speed comparison with reference values
+                            speed_arcmin_per_s = speed_deg_per_s * 60.0
+                            if log_pass:
+                                _log(verbose, f"SPEED DEBUG: {sat_name} angular speed = {speed_deg_per_s:.6f} deg/s = {speed_arcmin_per_s:.2f} '/s (ref: 18.4 '/s)")
                             speed_elapsed = time.time() - speed_start
                             total_speed_elapsed += speed_elapsed
+                            
+                            # Calculate satellite angular size and distance
+                            sat_distance_km = getattr(refine_minimum, 'iss_range_km', None)
+                            sat_angular_size = None
+                            if sat_distance_km and sat_name in SATELLITE_DIMENSIONS:
+                                sat_dimension_m = SATELLITE_DIMENSIONS[sat_name]
+                                sat_angular_size = satellite_angular_size_arcsec(sat_dimension_m, sat_distance_km)
                             
                             ev = Event(
                                 dt_utc=t_min,
@@ -535,21 +633,32 @@ def compute_events(
                                 target_alt_deg=tgt_alt_deg,
                                 sat_name=sat_name,
                                 speed_deg_per_s=speed_deg_per_s,
+                                sat_angular_size_arcsec=sat_angular_size,
+                                sat_distance_km=sat_distance_km,
                             )
-                            # Duration estimate: time while separation <= target_radius (approx 2*radius/speed)
+                            
+                            # Calculate correct transit duration using chord length
                             if speed_deg_per_s > 0 and sep_min_deg <= tgt_rad_deg:
-                                ev.duration_s = 2.0 * tgt_rad_deg / speed_deg_per_s
+                                ev.duration_s = calculate_transit_duration(sep_min_deg, tgt_rad_deg, speed_deg_per_s)
+                                chord_length_deg = 2.0 * math.sqrt(tgt_rad_deg**2 - sep_min_deg**2)
+                                chord_length_arcmin = chord_length_deg * 60.0
+                                if log_pass:
+                                    _log(verbose, f"DURATION DEBUG: sep={sep_min_deg:.6f}°, radius={tgt_rad_deg:.6f}°, chord={chord_length_arcmin:.1f}' (ref: 21.6'), duration={ev.duration_s:.2f}s (ref: 1.17s)")
+
                             if kind == "reachable" and sat_range_km is not None:
                                 ev.distance_km = round(math.radians(sep_min_deg) * float(sat_range_km), 3)
 
-                            _log(verbose, f"EVENT CREATED: {kind} {sat_name} {body} at {t_min}: sep={ev.separation_deg:.3f}°, duration={ev.duration_s or 0:.1f}s")
+                            if log_pass:
+                                _log(verbose, f"EVENT CREATED: {kind} {sat_name} {body} at {t_min}: sep={ev.separation_deg:.3f}°, duration={ev.duration_s or 0:.1f}s")
                             local_events.append(ev)
                     
                     pass_elapsed = time.time() - pass_start
-                    if verbose and pass_elapsed > 0.1:  # Only log slow passes
-                        print(f"    Pass timing: obs={obs_elapsed:.3f}s, angles={angle_elapsed:.3f}s, refine={total_refine_elapsed:.3f}s, speed={total_speed_elapsed:.3f}s, total={pass_elapsed:.3f}s", flush=True)
+                    if log_pass:
+                        if verbose and pass_elapsed > 0.1:  # Only log slow passes
+                            _log(verbose, f"    Pass timing: obs={obs_elapsed:.3f}s, angles={angle_elapsed:.3f}s, refine={total_refine_elapsed:.3f}s, speed={total_speed_elapsed:.3f}s, total={pass_elapsed:.3f}s", flush=True)
 
-                    _log(verbose, f"Pass {pass_idx+1} completed: found {len(local_events)} events")
+                    if log_pass:
+                        _log(verbose, f"Pass {pass_idx+1} completed: found {len(local_events)} events")
                     return local_events
                 return _run_pass
             jobs.append(make_job())
@@ -574,7 +683,7 @@ def compute_events(
                 current_time = time.time()
                 batch_time = current_time - last_progress_time
                 rate = (len(jobs)//10) / batch_time if batch_time > 0 else 0
-                print(f"  Progress: {completed}/{len(jobs)} passes refined ({rate:.1f} passes/s), total events: {len(events)}", flush=True)
+                #_log(verbose, f"  Progress: {completed}/{len(jobs)} passes refined ({rate:.1f} passes/s), total events: {len(events)}", flush=True)
                 last_progress_time = current_time
 
     refinement_elapsed = time.time() - refinement_start
@@ -629,8 +738,8 @@ def main():
     p.add_argument("--grid-elev-mode", type=str, choices=["base", "lookup"], default="base", help="Elevation for grid points: use base elevation or lookup per point (default base)")
     p.add_argument("--workers", type=int, default=0, help="Max worker threads for grid evaluation (0=auto)")
     p.add_argument("--verbose", action="store_true", help="Print progress logs")
-    p.add_argument("--satellites", type=str, default="ISS,TIANGONG", help="Comma-separated list of satellites: ISS,TIANGONG,HUBBLE or any combination (default: all three)")
-    p.add_argument("--start-utc", type=str, default=None, help="UTC start time for grid (e.g. 2025-09-13T19:59:00Z)")
+    p.add_argument("--satellites", type=str, default="ISS,TIANGONG,HUBBLE", help="Comma-separated list of satellites: ISS,TIANGONG,HUBBLE or any combination (default: all three)")
+    p.add_argument("--start-utc", type=str, default=None, help="UTC start time (e.g. 2025-09-13T20:00:00Z). Default: current time")
 
     args = p.parse_args()
 
@@ -691,7 +800,7 @@ def main():
         return
 
     # Table output
-    print("Time (UTC) / Local | Sat | Body | Kind | Sep (arcsec) | Disc Radius (arcsec) | Sat Alt (deg) | Target Alt (deg)")
+    print("Time (UTC) / Local | Sat | Body | Kind | Sep (arcsec) | Disc Radius (arcsec) | Sat Size (arcsec) | Sat Dist (km) | Duration (s) | Sat Alt (deg) | Target Alt (deg)")
     for e in events:
         sep_arcsec = e.separation_deg * 3600.0
         rad_arcsec = e.target_radius_deg * 3600.0
@@ -700,7 +809,10 @@ def main():
             dt_local = localize(e.dt_utc, args.timezone)
             dt_disp += f" / {dt_local.strftime('%Y-%m-%d %H:%M:%S %Z')}"
         sat_disp = getattr(e, 'sat_name', 'UNKNOWN') or 'UNKNOWN'
-        print(f"{dt_disp} | {sat_disp:10} | {e.body:4} | {e.kind:7} | {sep_arcsec:9.1f} | {rad_arcsec:16.1f} | {e.iss_alt_deg:11.1f} | {e.target_alt_deg:14.1f}")
+        sat_size_disp = f"{e.sat_angular_size_arcsec:.1f}" if e.sat_angular_size_arcsec else "N/A"
+        sat_dist_disp = f"{e.sat_distance_km:.1f}" if e.sat_distance_km else "N/A"
+        duration_disp = f"{e.duration_s:.2f}" if e.duration_s else "N/A"
+        print(f"{dt_disp} | {sat_disp:10} | {e.body:4} | {e.kind:7} | {sep_arcsec:9.1f} | {rad_arcsec:16.1f} | {sat_size_disp:13} | {sat_dist_disp:10} | {duration_disp:11} | {e.iss_alt_deg:11.1f} | {e.target_alt_deg:14.1f}")
 
 
 if __name__ == "__main__":

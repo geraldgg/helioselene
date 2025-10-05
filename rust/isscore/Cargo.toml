@@ -6,12 +6,20 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+# Enable WGS-72 Earth figure constants (radius/flattening) to better match python-sgp4/Skyfield assumptions for TLE propagation.
+# Usage: cargo build --features wgs72
+wgs72 = []
+
+default = []
+
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-chrono = "0.4"
+chrono = { version = "0.4", features = ["clock"] }
 sgp4 = "2.3"
 practical-astronomy-rust = "0.2.4"
 log = "0.4"
 env_logger = "0.11"
 android_logger = "0.13"
+erfa = "0.2"

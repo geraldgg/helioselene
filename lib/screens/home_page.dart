@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import '../core/ffi.dart';
 import '../models/transit.dart';
@@ -19,7 +18,7 @@ class _HomePageState extends State<HomePage> {
   final List<Satellite> _satellites = Satellite.supportedSatellites
       .map((s) => Satellite(name: s.name, noradId: s.noradId, tleUrl: s.tleUrl, selected: true))
       .toList();
-  double _nearArcmin = 10.0;
+  double _maxDistanceKm = 35.0;
 
   Future<void> _runPrediction() async {
     setState(() { _busy = true; _error = null; _events = []; });
@@ -28,16 +27,17 @@ class _HomePageState extends State<HomePage> {
         setState(() { _error = 'Select at least one satellite.'; });
         return;
       }
-      final DateTime startUtc = DateTime.utc(2025, 9, 13, 20, 0, 0); // fixed window for now
-      final DateTime endUtc = startUtc.add(const Duration(days: 14));
+
+      final DateTime startUtc = DateTime.utc(2025, 10, 05, 18, 40, 0); // fixed window for now
+      final DateTime endUtc = startUtc.add(const Duration(days: 15));
       final results = await NativeCore.predictTransitsForSatellites(
         satellites: _satellites,
-        lat: 48.786839,
-        lon: 2.49813,
+        lat: 48.78698,
+        lon: 2.49835,
         altM: 36,
         startUtc: startUtc,
         endUtc: endUtc,
-        nearArcmin: _nearArcmin,
+        maxDistanceKm: _maxDistanceKm,
       );
       results.sort((a,b)=> a.timeUtc.compareTo(b.timeUtc));
       setState(() { _events = results; });
@@ -52,7 +52,7 @@ class _HomePageState extends State<HomePage> {
   Widget build(BuildContext context) {
     final dateFmt = DateFormat('yyyy-MM-dd HH:mm:ss').addPattern(' UTC');
     return Scaffold(
-      appBar: AppBar(title: const Text('Transit Finder')),
+      appBar: AppBar(title: const Text('HelioSelene Transits')),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -78,21 +78,21 @@ class _HomePageState extends State<HomePage> {
                         )),
                     Row(
                       children: [
-                        const Text('Near margin (arcmin):'),
+                        const Text('Max distance (km):'),
                         const SizedBox(width: 8),
                         Expanded(
                           child: Slider(
-                            value: _nearArcmin,
-                            min: 1,
-                            max: 60,
-                            divisions: 59,
-                            label: _nearArcmin.toStringAsFixed(0),
-                            onChanged: _busy ? null : (v) => setState(()=> _nearArcmin = v),
+                            value: _maxDistanceKm,
+                            min: 0,
+                            max: 200,
+                            divisions: 200,
+                            label: _maxDistanceKm.toStringAsFixed(0),
+                            onChanged: _busy ? null : (v) => setState(()=> _maxDistanceKm = v),
                           ),
                         ),
                         SizedBox(
                           width: 48,
-                          child: Text(_nearArcmin.toStringAsFixed(0), textAlign: TextAlign.end),
+                          child: Text(_maxDistanceKm.toStringAsFixed(0), textAlign: TextAlign.end),
                         )
                       ],
                     )
@@ -130,8 +130,9 @@ class _HomePageState extends State<HomePage> {
                           subtitle: Text(
                             'Sat: $satLabel\n'
                             'When: ${dateFmt.format(e.timeUtc)}\n'
-                            'Min separation: ${e.minSeparationArcsec.toStringAsFixed(1)}″  Duration: ${e.durationSeconds.toStringAsFixed(2)} s\n'
-                            'Alt: ${e.bodyAltitudeDeg.toStringAsFixed(1)}°  Range: ${e.issRangeKm.toStringAsFixed(0)} km  Size: ${e.issAngularSizeArcsec.toStringAsFixed(1)}″'
+                            'Angular sep: ${e.minSeparationArcmin.toStringAsFixed(1)}\' (target radius: ${e.targetRadiusArcmin.toStringAsFixed(1)}\')  Az: ${e.satAzDeg.toStringAsFixed(1)}°\n'
+                            'Sat alt: ${e.satAltitudeDeg.toStringAsFixed(1)}°  Body alt: ${e.bodyAltitudeDeg.toStringAsFixed(1)}°  Speed: ${e.speedArcminPerS.toStringAsFixed(2)}\'/s\n'
+                            'Range: ${e.issRangeKm.toStringAsFixed(0)} km  Size: ${e.issAngularSizeArcsec.toStringAsFixed(2)}\"  Dur: ${e.durationSeconds.toStringAsFixed(2)} s  Kind: ${e.kind}'
                           ),
                         );
                       },

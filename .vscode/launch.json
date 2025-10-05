@@ -7,11 +7,15 @@
             "request": "launch",
             "program": "${workspaceFolder}/iss_transits.py",
             "args": [
-                "--lat", "48.786839",
-                "--lon", "2.49813",
-                "--days", "14",
-                "--max-distance-km=35",
-                "--start-utc", "2025-09-13T20:00:00Z"
+                "--lat", "48.78698",
+                "--lon", "2.49835",
+                "--elev", "36",
+                "--days", "15",
+                "--max-distance-km", "35",
+                "--start-utc", "2025-10-05T00:00:00Z",
+                //"--start-utc", "2025-09-13T20:00:00Z",
+                "--json",
+                "--satellites=ISS",
                 "--verbose"
             ],
             "console": "integratedTerminal",
@@ -20,18 +24,10 @@
             "justMyCode": true
         },
         {
-            "name": "Debug ISS Transits - Extended Search",
+            "name": "SGP4 Compare",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/iss_transits.py",
-            "args": [
-                "--lat", "48.786839",
-                "--lon", "2.49813",
-                "--days", "14",
-                "--max-distance-km", "50",
-                "--grid-step-km", "5",
-                "--verbose"
-            ],
+            "program": "${workspaceFolder}/sgp4_compare.py",
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
             "python": "${workspaceFolder}/.venv/Scripts/python.exe",

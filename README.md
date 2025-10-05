@@ -1,4 +1,4 @@
-# Helioselene
+# HelioSelene
 
 Predict when bright low‑Earth orbit satellites (ISS, Tiangong, Hubble) cross *in front of* or pass *very close to* the Sun or Moon for a chosen location and time window.
 

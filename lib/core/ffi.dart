@@ -12,7 +12,7 @@ typedef _PredictTransitsNative = ffi.Pointer<ffi.Char> Function(
   ffi.Pointer<ffi.Char>, ffi.Pointer<ffi.Char>, // tle1, tle2
   ffi.Double, ffi.Double, ffi.Double, // lat, lon, alt_m
   ffi.Int64, ffi.Int64,               // start_epoch, end_epoch (UTC seconds)
-  ffi.Double                          // near_arcmin
+  ffi.Double                          // max_distance_km (was near_arcmin)
 );
 
 typedef _PredictTransitsDart = ffi.Pointer<ffi.Char> Function(
@@ -32,12 +32,10 @@ class NativeCore {
     if (Platform.isAndroid) {
       return ffi.DynamicLibrary.open('libisscore.so');
     } else if (Platform.isWindows) {
-      // for desktop testing (if you ever build a DLL)
       return ffi.DynamicLibrary.open('isscore.dll');
     } else if (Platform.isLinux) {
       return ffi.DynamicLibrary.open('libisscore.so');
     } else if (Platform.isMacOS || Platform.isIOS) {
-      // iOS/macOS later: use DynamicLibrary.process() if linked statically
       return ffi.DynamicLibrary.process();
     }
     throw UnsupportedError('Unsupported platform');
@@ -58,16 +56,19 @@ class NativeCore {
     required double altM,
     required DateTime startUtc,
     required DateTime endUtc,
-    double nearArcmin = 10.0,
+    double nearMarginDeg = 0.5, // retained for API stability, ignored in v2
+    double maxDistanceKm = 35.0,
   }) {
     final startEpoch = startUtc.toUtc().millisecondsSinceEpoch ~/ 1000;
     final endEpoch = endUtc.toUtc().millisecondsSinceEpoch ~/ 1000;
-    _logger.info('[FFI] predictTransits called with:');
+    _logger.info('[FFI] predictTransits (v2 only) called with:');
     _logger.info('  tle1: $tle1');
     _logger.info('  tle2: $tle2');
     _logger.info('  lat: $lat, lon: $lon, altM: $altM');
     _logger.info('  startEpoch: $startEpoch, endEpoch: $endEpoch');
-    _logger.info('  nearArcmin: $nearArcmin');
+    _logger.info('  nearMarginDeg (ignored in v2): $nearMarginDeg');
+    _logger.info('  maxDistanceKm: $maxDistanceKm');
+
     final tle1Ptr = tle1.toNativeUtf8().cast<ffi.Char>();
     final tle2Ptr = tle2.toNativeUtf8().cast<ffi.Char>();
     try {
@@ -75,17 +76,16 @@ class NativeCore {
         tle1Ptr, tle2Ptr,
         lat, lon, altM,
         startEpoch, endEpoch,
-        nearArcmin,
+        maxDistanceKm,
       );
       if (ptr == ffi.nullptr) {
-        _logger.severe('[FFI] predict_transits_v2 returned null pointer');
-        throw Exception('Native predict_transits_v2 returned null');
+        _logger.severe('[FFI] native predict function returned null pointer');
+        throw Exception('Native predict returned null');
       }
       final jsonStr = ptr.cast<Utf8>().toDartString();
       _logger.info('[FFI] Raw JSON from native: $jsonStr');
       _freeJson(ptr);
       final List<dynamic> decoded = json.decode(jsonStr);
-      _logger.info('[FFI] Decoded JSON: $decoded');
       return decoded.map((e) => Transit.fromJson(e)).toList();
     } catch (e, st) {
       _logger.severe('[FFI] Exception: $e\n$st');
@@ -104,7 +104,8 @@ class NativeCore {
     required double altM,
     required DateTime startUtc,
     required DateTime endUtc,
-    double nearArcmin = 10.0,
+    double nearMarginDeg = 0.5, // kept for compatibility
+    double maxDistanceKm = 35.0,
   }) async {
     List<Transit> allResults = [];
     for (final sat in satellites.where((s) => s.selected)) {
@@ -136,7 +137,8 @@ class NativeCore {
           altM: altM,
           startUtc: startUtc,
           endUtc: endUtc,
-          nearArcmin: nearArcmin,
+          nearMarginDeg: nearMarginDeg, // ignored
+          maxDistanceKm: maxDistanceKm,
         );
         allResults.addAll(results.map((t) => t.copyWith(satellite: sat.name)));
       } catch (e, st) {
