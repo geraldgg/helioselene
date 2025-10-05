@@ -16,6 +16,32 @@ add_executable(${BINARY_NAME} WIN32
   "runner.exe.manifest"
 )
 
+# --- Rust native library improved auto-build integration (incremental) ---
+set(RUST_BUILD_SCRIPT "${CMAKE_SOURCE_DIR}/../scripts/build_rust_windows.ps1")
+set(RUST_CRATE_DIR    "${CMAKE_SOURCE_DIR}/../rust/isscore")
+if(EXISTS ${RUST_BUILD_SCRIPT})
+  file(GLOB_RECURSE RUST_SRC
+       RELATIVE ${CMAKE_SOURCE_DIR}
+       "../rust/isscore/src/*.rs" "../rust/isscore/Cargo.toml")
+  set(RUST_STAMP "${CMAKE_BINARY_DIR}/isscore_build.stamp")
+  add_custom_command(
+    OUTPUT ${RUST_STAMP}
+    COMMAND powershell -ExecutionPolicy Bypass -File "${RUST_BUILD_SCRIPT}" -Configuration $<IF:$<OR:$<CONFIG:Release>,$<CONFIG:Profile>>,Release,Debug>
+    COMMAND ${CMAKE_COMMAND} -E touch ${RUST_STAMP}
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/.."
+    DEPENDS ${RUST_SRC}
+    COMMENT "(Re)Building Rust iscore.dll (triggered by source changes)"
+    VERBATIM
+  )
+  add_custom_target(isscore_rust_build DEPENDS ${RUST_STAMP})
+  add_dependencies(${BINARY_NAME} isscore_rust_build)
+  # Ensure Flutter asset assemble also waits for Rust build (similar to Android preBuild)
+  add_dependencies(flutter_assemble isscore_rust_build)
+else()
+  message(WARNING "Rust build script not found at ${RUST_BUILD_SCRIPT}; skipping automatic native build.")
+endif()
+# --- End Rust integration ---
+
 # Apply the standard set of build settings. This can be removed for applications
 # that need different build settings.
 apply_standard_settings(${BINARY_NAME})
