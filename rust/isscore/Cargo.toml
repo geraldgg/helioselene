@@ -4,7 +4,7 @@ version = "0.2.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]  # Add rlib to enable unit tests
 
 [features]
 # Enable WGS-72 Earth figure constants (radius/flattening) to better match python-sgp4/Skyfield assumptions for TLE propagation.

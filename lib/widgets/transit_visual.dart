@@ -58,8 +58,8 @@ class TransitPainter extends CustomPainter {
     final bodyPaint = Paint()
       ..style = PaintingStyle.fill
       ..shader = RadialGradient(colors: transit.body == 'Sun'
-          ? [Colors.orangeAccent, Colors.deepOrange]
-          : [Colors.grey.shade300, Colors.grey.shade600]).createShader(Rect.fromCircle(center: center, radius: size.width * 0.4));
+          ? [Colors.yellowAccent, Colors.yellow.shade700]
+          : [Colors.grey.shade100, Colors.grey.shade400]).createShader(Rect.fromCircle(center: center, radius: size.width * 0.4));
 
     final rPx = size.width * 0.4; // body radius in pixels
     canvas.drawCircle(center, rPx, bodyPaint);
@@ -68,83 +68,84 @@ class TransitPainter extends CustomPainter {
     // Mark center (smaller in mini mode)
     canvas.drawCircle(center, mini ? 1.5 : 3, Paint()..color = Colors.white);
 
-    // Draw satellite path approximation: horizontal line offset by separation ratio
+    // ===== New motion-based path orientation logic =====
     final rArc = transit.targetRadiusArcmin;
-    double? lineStartX;
-    double? lineEndX;
-    double? lineY;
+    double? halfLenPx; // half-length actually drawn
+    Offset? lineCenter; // closest approach point
+    Offset? vDir; // unit vector along motion in canvas coords
+    Offset? pStart; Offset? pEnd; // endpoints
+
     if (rArc > 0) {
-      final dArc = chord.offsetArcmin;
-      final offsetFrac = (dArc / rArc).clamp(-1.0, 1.0);
-      final y = center.dy - offsetFrac * rPx; // invert so positive offset plots upward consistently
+      // Determine motion bearing.
+      // Rust provides motion_direction_deg where: 0° = North (up), 90° = East (right), increasing clockwise.
+      // Canvas coordinates: +x = right (East), +y = down (South). So bearing b maps to unit vector:
+      //   v = (sin(b), -cos(b)). (Because for b=0 => (0,-1) up; b=90 => (1,0) right; b=180 => (0,1) down; b=270 => (-1,0) left.)
+      double bearingDeg;
+      if (transit.motionDirectionDeg.isFinite && transit.motionDirectionDeg.abs() > 1e-9) {
+        bearingDeg = transit.motionDirectionDeg % 360.0;
+        if (bearingDeg < 0) bearingDeg += 360.0;
+      } else if ((transit.velocityAltDegPerS.abs() + transit.velocityAzDegPerS.abs()) > 1e-9) {
+        // Reconstruct bearing consistent with Rust's definition: atan2(vel_az, vel_alt)
+        bearingDeg = math.atan2(transit.velocityAzDegPerS, transit.velocityAltDegPerS) * 180.0 / math.pi;
+        if (bearingDeg < 0) bearingDeg += 360.0;
+      } else {
+        // Fallback: arbitrary eastward motion
+        bearingDeg = 90.0;
+      }
+      final bRad = bearingDeg * math.pi / 180.0;
+
+      final v = Offset(math.sin(bRad), -math.cos(bRad));
+      final vMag = v.distance;
+      vDir = vMag > 0 ? (v / vMag) : const Offset(1,0);
+      // Perpendicular (shift) vector (rotate vDir 90° CCW). Keep previous semantic: positive offsetArcmin moves upward visually.
+      final nDir = Offset(-vDir.dy, vDir.dx); // unit length
+
+      final offsetFrac = (chord.offsetArcmin / rArc).clamp(-1.0, 1.0);
+      final offsetPx = offsetFrac * rPx;
+      lineCenter = center + nDir * (-offsetPx);
+
+      if (chord.isTransit) {
+        halfLenPx = (chord.chordArcmin / rArc) * rPx * 0.5;
+      } else {
+        halfLenPx = rPx * 1.2; // near-miss line length
+      }
+
+      pStart = lineCenter - vDir * halfLenPx;
+      pEnd   = lineCenter + vDir * halfLenPx;
+
       final pathPaint = Paint()
         ..color = chord.isTransit ? Colors.lightBlueAccent : Colors.orangeAccent
         ..strokeWidth = mini ? 1.5 : 3
         ..style = PaintingStyle.stroke
         ..strokeCap = StrokeCap.round;
+      canvas.drawLine(pStart, pEnd, pathPaint);
 
-      if (chord.isTransit) {
-        // chord segment within disk
-        final halfChordFrac = chord.chordArcmin / (2 * rArc); // relative to diameter
-        final halfChordPx = halfChordFrac * (2 * rPx);
-        lineStartX = center.dx - halfChordPx;
-        lineEndX = center.dx + halfChordPx;
-        lineY = y;
-        canvas.drawLine(Offset(lineStartX, y), Offset(lineEndX, y), pathPaint);
-      } else {
-        // near miss: draw approximate path near disk
-        lineStartX = center.dx - rPx * 1.2;
-        lineEndX = center.dx + rPx * 1.2;
-        lineY = y;
-        canvas.drawLine(Offset(lineStartX, y), Offset(lineEndX, y), pathPaint
-          ..color = Colors.deepOrangeAccent
-          ..strokeWidth = mini ? 1 : 2);
+      if (showDirectionArrow) {
+        // Arrow now replaces the previous satellite dot at the closest approach (lineCenter)
+        final arrowHead = lineCenter; // tip at closest approach
+        final arrowSize = mini ? 6.0 : 10.0;
+        const headAngle = math.pi / 6; // 30°
+        Offset rot(Offset a, double ang) => Offset(
+          a.dx * math.cos(ang) - a.dy * math.sin(ang),
+          a.dx * math.sin(ang) + a.dy * math.cos(ang),
+        );
+        // Build two side vectors pointing backwards from head along -vDir then rotated ±headAngle
+        final back = -vDir; // direction opposite motion
+        final b1 = rot(back, headAngle);
+        final b2 = rot(back, -headAngle);
+        final arrowPaint = Paint()
+          ..color = Colors.black54
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = mini ? 1 : 1.5
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round;
+        canvas.drawLine(arrowHead, arrowHead + b1 * arrowSize, arrowPaint);
+        canvas.drawLine(arrowHead, arrowHead + b2 * arrowSize, arrowPaint);
       }
-
-      // Draw satellite marker at closest approach (center of chord)
-      final satMarker = Paint()..color = Colors.cyanAccent;
-      canvas.drawCircle(Offset(center.dx, y), mini ? 2.5 : 5, satMarker);
     }
 
-    // Draw arrow if enabled and we have a path
-    if (showDirectionArrow && lineStartX != null && lineEndX != null && lineY != null) {
-      final arrowSize = mini ? 6.0 : 10.0;
-      final arrowPaint = Paint()
-        ..color = Colors.yellowAccent
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = mini ? 1 : 1.5
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round;
-      final headX = arrowRightward ? lineEndX : lineStartX;
-      final baseDir = arrowRightward ? -1 : 1; // direction to go back along line
-      final centerHead = Offset(headX, lineY);
-      // Two lines forming a simple arrow head
-      final p1 = centerHead + Offset(baseDir * arrowSize, -arrowSize * 0.55);
-      final p2 = centerHead + Offset(baseDir * arrowSize, arrowSize * 0.55);
-      canvas.drawLine(centerHead, p1, arrowPaint);
-      canvas.drawLine(centerHead, p2, arrowPaint);
-    }
-
-    if (showLegend && !mini) {
-      // Legend / text
-      final textPainter = (String txt, double dy, {Color color = Colors.white, double sizePx = 12}) {
-        final tp = TextPainter(
-          text: TextSpan(style: TextStyle(color: color, fontSize: sizePx), text: txt),
-          textDirection: TextDirection.ltr,
-          maxLines: 1,
-        )..layout();
-        tp.paint(canvas, Offset(8, dy));
-      };
-
-      textPainter('${transit.body} ${transit.kind}', 8, sizePx: 14);
-      textPainter('Sep: ${transit.minSeparationArcmin.toStringAsFixed(2)}\'  Rad: ${transit.targetRadiusArcmin.toStringAsFixed(2)}\'', 26);
-      if (chord.isTransit) {
-        textPainter('Chord: ${chord.chordArcmin.toStringAsFixed(2)}\'', 44);
-      } else {
-        textPainter('Near miss (outside disk)', 44, color: Colors.orangeAccent);
-      }
-      textPainter('Dur: ${transit.durationSeconds.toStringAsFixed(2)}s  Alt: ${transit.satAltitudeDeg.toStringAsFixed(1)}°', 62);
-    }
+    // Legend removed per updated requirement (no text overlay inside body)
+    // ===== End new motion logic =====
   }
 
   @override
@@ -153,6 +154,7 @@ class TransitPainter extends CustomPainter {
       oldDelegate.showLegend != showLegend ||
       oldDelegate.mini != mini ||
       oldDelegate.showDirectionArrow != showDirectionArrow ||
+      // arrowRightward retained for backward API compatibility but no longer affects orientation
       oldDelegate.arrowRightward != arrowRightward;
 }
 

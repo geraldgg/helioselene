@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:geolocator/geolocator.dart';
+import 'dart:ui' show lerpDouble; // added for hero scaling
 import '../core/ffi.dart';
 import '../models/transit.dart';
 import '../models/satellite.dart';
@@ -225,38 +226,8 @@ class _HomePageState extends State<HomePage> {
                             ? e.durationSeconds.toStringAsFixed(2)
                             : '-';
                         final dir = _compassDir(e.satAzDeg);
-                        return ListTile(
-                          leading: SizedBox(
-                            width: 64,
-                            height: 64,
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Expanded(
-                                  child: TransitVisual(
-                                    key: ValueKey('transit-mini-$i-${e.timeUtc.toIso8601String()}'),
-                                    transit: e,
-                                    mini: true,
-                                    showLegend: false,
-                                    size: 56,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  satLabel.split(' ').first,
-                                  style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ],
-                            ),
-                          ),
-                          title: Text('${e.body} — ${e.kind}'),
-                          subtitle: Text(
-                            'When: ${dateFmt.format(localTime)}\n'
-                            'Distance: ${e.issRangeKm.toStringAsFixed(0)} km  Dur: $durationStr s\n'
-                            'Alt: ${e.satAltitudeDeg.toStringAsFixed(1)}°  Az: ${e.satAzDeg.toStringAsFixed(1)}° ${dir.isNotEmpty ? '($dir)' : ''}'
-                          ),
-                          isThreeLine: true,
+                        // Custom row to ensure vertical centering between preview and text
+                        return InkWell(
                           onTap: () {
                             Navigator.of(context).push(
                               MaterialPageRoute(
@@ -264,7 +235,126 @@ class _HomePageState extends State<HomePage> {
                               ),
                             );
                           },
-                          trailing: const Icon(Icons.chevron_right),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 8.0),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                SizedBox(
+                                  width: 72,
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Hero(
+                                        tag: 'transit-${e.timeUtc.toIso8601String()}',
+                                        flightShuttleBuilder: (flightContext, animation, direction, fromContext, toContext) {
+                                          final curved = CurvedAnimation(parent: animation, curve: Curves.easeInOut);
+                                          final baseColor = e.body == 'Sun' ? Colors.orangeAccent : Colors.blueGrey;
+                                          // Determine source and destination sizes
+                                          final fromSize = (fromContext?.findRenderObject() as RenderBox?)?.size;
+                                          final toSize = (toContext?.findRenderObject() as RenderBox?)?.size;
+                                          final src = fromSize?.shortestSide ?? 56.0;
+                                          final dstRaw = toSize?.shortestSide;
+                                          // If destination size not yet known, assume a target upscale (e.g., 260)
+                                          final dst = (dstRaw != null && dstRaw > 0) ? dstRaw : 260.0;
+                                          final scaleTween = Tween<double>(begin: 1.0, end: dst / src);
+                                          return AnimatedBuilder(
+                                            animation: curved,
+                                            builder: (_, child) {
+                                              final t = curved.value;
+                                              final forward = direction == HeroFlightDirection.push;
+                                              final haloT = forward ? t : (1 - t);
+                                              final haloOpacity = (1 - haloT) * 0.5; // fades out as it approaches
+                                              final haloScale = lerpDouble(0.6, 1.3, haloT)!;
+                                              final scale = scaleTween.lerp(t);
+                                              return Transform.scale(
+                                                scale: scale,
+                                                child: Stack(
+                                                  alignment: Alignment.center,
+                                                  children: [
+                                                    Opacity(
+                                                      opacity: haloOpacity.clamp(0.0, 0.5),
+                                                      child: Transform.scale(
+                                                        scale: haloScale,
+                                                        child: Container(
+                                                          decoration: BoxDecoration(
+                                                            shape: BoxShape.circle,
+                                                            gradient: RadialGradient(
+                                                              colors: [
+                                                                baseColor.withOpacity(0.35),
+                                                                baseColor.withOpacity(0.05),
+                                                                Colors.transparent,
+                                                              ],
+                                                              stops: const [0.0, 0.5, 1.0],
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                    child!,
+                                                  ],
+                                                ),
+                                              );
+                                            },
+                                            child: SizedBox(
+                                              width: src, // build at source size and scale up for sharpness tradeoff
+                                              height: src,
+                                              child: TransitVisual(
+                                                transit: e,
+                                                mini: true,
+                                                showLegend: false,
+                                                size: src,
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                        child: TransitVisual(
+                                          transit: e,
+                                          mini: true,
+                                          showLegend: false,
+                                          size: 56,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        satLabel.split(' ').first,
+                                        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        '${e.body} — ${e.kind}',
+                                        style: Theme.of(context).textTheme.titleSmall,
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        'When: ${dateFmt.format(localTime)}',
+                                        style: Theme.of(context).textTheme.bodySmall,
+                                      ),
+                                      Text(
+                                        'Distance: ${e.issRangeKm.toStringAsFixed(0)} km  Dur: $durationStr s',
+                                        style: Theme.of(context).textTheme.bodySmall,
+                                      ),
+                                      Text(
+                                        'Alt: ${e.satAltitudeDeg.toStringAsFixed(1)}°  Az: ${e.satAzDeg.toStringAsFixed(1)}° ${dir.isNotEmpty ? '($dir)' : ''}',
+                                        style: Theme.of(context).textTheme.bodySmall,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                const Icon(Icons.chevron_right, size: 20),
+                              ],
+                            ),
+                          ),
                         );
                       },
                     ),
@@ -277,7 +367,7 @@ class _HomePageState extends State<HomePage> {
                 child: Container(
                   padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
                   decoration: BoxDecoration(
-                    color: Colors.red.withOpacity(0.1),
+                    color: Colors.red.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(6),
                     border: Border.all(color: Colors.redAccent),
                   ),

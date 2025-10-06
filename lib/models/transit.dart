@@ -13,6 +13,9 @@ class Transit {
   final double satAltitudeDeg; // new (sat_alt_deg)
   final double speedDegPerS; // new
   final double speedArcminPerS; // new
+  final double velocityAltDegPerS; // newly added
+  final double velocityAzDegPerS;  // newly added
+  final double motionDirectionDeg; // newly added (direction of motion projection)
 
   Transit({
     required this.timeUtc,
@@ -29,6 +32,9 @@ class Transit {
     required this.satAltitudeDeg,
     required this.speedDegPerS,
     required this.speedArcminPerS,
+    this.velocityAltDegPerS = 0.0,
+    this.velocityAzDegPerS = 0.0,
+    this.motionDirectionDeg = 0.0,
   });
 
   static Transit fromJson(Map<String, dynamic> j) {
@@ -83,6 +89,9 @@ class Transit {
     final targetRadiusArcmin = (j['target_radius_arcmin'] ?? j['targetRadiusArcmin'] ?? 0).toDouble();
     final speedDegPerS = (j['speed_deg_per_s'] ?? j['speedDegPerS'] ?? 0).toDouble();
     final speedArcminPerS = (j['speed_arcmin_per_s'] ?? j['speedArcminPerS'] ?? (speedDegPerS * 60.0)).toDouble();
+    final velocityAltDegPerS = (j['velocity_alt_deg_per_s'] ?? j['velocityAltDegPerS'] ?? 0).toDouble();
+    final velocityAzDegPerS = (j['velocity_az_deg_per_s'] ?? j['velocityAzDegPerS'] ?? 0).toDouble();
+    final motionDirectionDeg = (j['motion_direction_deg'] ?? j['motionDirectionDeg'] ?? 0).toDouble();
 
     return Transit(
       timeUtc: timeUtc,
@@ -99,6 +108,9 @@ class Transit {
       satAltitudeDeg: satAltitudeDeg,
       speedDegPerS: speedDegPerS,
       speedArcminPerS: speedArcminPerS,
+      velocityAltDegPerS: velocityAltDegPerS,
+      velocityAzDegPerS: velocityAzDegPerS,
+      motionDirectionDeg: motionDirectionDeg,
     );
   }
 
@@ -117,6 +129,9 @@ class Transit {
     double? satAltitudeDeg,
     double? speedDegPerS,
     double? speedArcminPerS,
+    double? velocityAltDegPerS,
+    double? velocityAzDegPerS,
+    double? motionDirectionDeg,
   }) {
     return Transit(
       timeUtc: timeUtc ?? this.timeUtc,
@@ -132,6 +147,9 @@ class Transit {
       satAltitudeDeg: satAltitudeDeg ?? this.satAltitudeDeg,
       speedDegPerS: speedDegPerS ?? this.speedDegPerS,
       speedArcminPerS: speedArcminPerS ?? this.speedArcminPerS,
+      velocityAltDegPerS: velocityAltDegPerS ?? this.velocityAltDegPerS,
+      velocityAzDegPerS: velocityAzDegPerS ?? this.velocityAzDegPerS,
+      motionDirectionDeg: motionDirectionDeg ?? this.motionDirectionDeg,
       satellite: satellite ?? this.satellite,
     );
   }

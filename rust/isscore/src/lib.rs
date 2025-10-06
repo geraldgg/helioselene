@@ -54,6 +54,7 @@ impl Vector3 {
 // ============================================================================
 
 #[derive(Serialize, Debug)]
+#[cfg_attr(test, derive(serde::Deserialize))]  // Add Deserialize only for tests
 struct Event {
     time_utc: String,
     body: String,
@@ -66,6 +67,9 @@ struct Event {
     satellite: String,
     speed_deg_per_s: f64,
     speed_arcmin_per_s: f64,
+    velocity_alt_deg_per_s: f64,
+    velocity_az_deg_per_s: f64,
+    motion_direction_deg: f64,
     duration_s: f64,
     sat_angular_size_arcsec: f64,
     sat_distance_km: f64,
@@ -388,7 +392,7 @@ fn calculate_speed_and_duration(
     observer_lon_rad: f64,
     body: &str,
     step_s: f64,
-) -> Result<f64, String> {
+) -> Result<(f64, f64, f64, f64), String> {
     let t_minus = t_min - Duration::milliseconds((step_s * 1000.0) as i64);
     let t_plus = t_min + Duration::milliseconds((step_s * 1000.0) as i64);
     
@@ -398,6 +402,11 @@ fn calculate_speed_and_duration(
     let (alt_m, az_m) = altaz(&sat_m);
     let (alt_p, az_p) = altaz(&sat_p);
     
+    // Calculate velocity components
+    let velocity_alt_deg_per_s = (alt_p - alt_m) / (2.0 * step_s);
+    let velocity_az_deg_per_s = (az_p - az_m) / (2.0 * step_s);
+    
+    // Calculate total angular speed (magnitude)
     let alt_m_rad = alt_m.to_radians();
     let az_m_rad = az_m.to_radians();
     let alt_p_rad = alt_p.to_radians();
@@ -417,8 +426,17 @@ fn calculate_speed_and_duration(
     
     let angular_dist_rad = angle_between(&vec_m, &vec_p);
     let speed_rad_per_s = angular_dist_rad / (2.0 * step_s);
+    let speed_deg_per_s = speed_rad_per_s.to_degrees();
     
-    Ok(speed_rad_per_s.to_degrees())
+    // Calculate motion direction angle (0° = North, 90° = East, clockwise)
+    let motion_direction_deg = velocity_az_deg_per_s.atan2(velocity_alt_deg_per_s).to_degrees();
+    let motion_direction_normalized = if motion_direction_deg < 0.0 {
+        motion_direction_deg + 360.0
+    } else {
+        motion_direction_deg
+    };
+    
+    Ok((speed_deg_per_s, velocity_alt_deg_per_s, velocity_az_deg_per_s, motion_direction_normalized))
 }
 
 fn calculate_transit_duration(
@@ -540,9 +558,9 @@ pub extern "C" fn predict_transits(
                                     continue;
                                 }
                                 
-                                let speed_deg_per_s = calculate_speed_and_duration(
+                                let (speed_deg_per_s, velocity_alt_deg_per_s, velocity_az_deg_per_s, motion_direction_deg) = calculate_speed_and_duration(
                                     &elements, t_min, &observer_ecef, observer_lat_rad, observer_lon_rad, body, fine_step_s
-                                ).unwrap_or(0.0);
+                                ).unwrap_or((0.0, 0.0, 0.0, 0.0));
                                 
                                 let duration_s = calculate_transit_duration(min_sep_deg, radius_deg, speed_deg_per_s);
                                 
@@ -565,6 +583,9 @@ pub extern "C" fn predict_transits(
                                     satellite: "ISS (ZARYA)".to_string(),
                                     speed_deg_per_s,
                                     speed_arcmin_per_s: speed_deg_per_s * 60.0,
+                                    velocity_alt_deg_per_s,
+                                    velocity_az_deg_per_s,
+                                    motion_direction_deg,
                                     duration_s,
                                     sat_angular_size_arcsec: sat_ang_size,
                                     sat_distance_km: sat_range,
@@ -604,5 +625,223 @@ pub extern "C" fn free_json(ptr: *mut c_char) {
     }
     unsafe {
         let _ = CString::from_raw(ptr);
+    }
+}
+
+// ============================================================================
+// Unit Tests (for private functions)
+// ============================================================================
+// Integration tests are in tests/integration_tests.rs
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn test_vector3_operations() {
+        let v1 = Vector3::new(3.0, 4.0, 0.0);
+        let v2 = Vector3::new(1.0, 0.0, 0.0);
+        
+        assert_eq!(v1.norm(), 5.0);
+        assert_eq!(v1.dot(&v2), 3.0);
+        
+        let v3 = v1.sub(&v2);
+        assert_eq!(v3.x, 2.0);
+        assert_eq!(v3.y, 4.0);
+        assert_eq!(v3.z, 0.0);
+    }
+
+    #[test]
+    fn test_observer_ecef_position() {
+        // Test Paris coordinates
+        let lat: f64 = 48.8566;
+        let lon: f64 = 2.3522;
+        let alt_m = 35.0;
+        
+        let lat_rad = lat.to_radians();
+        let lon_rad = lon.to_radians();
+        let ecef = geodetic_to_ecef(lat_rad, lon_rad, alt_m);
+        
+        // Verify position is reasonable (somewhere near Earth's surface)
+        let radius = ecef.norm();
+        assert!(radius > 6300.0 && radius < 6500.0, "ECEF radius should be near Earth radius");
+        
+        // Verify it's in the northern hemisphere (positive Z for northern lat)
+        assert!(ecef.z > 0.0, "Z component should be positive for northern latitude");
+    }
+
+    #[test]
+    fn test_datetime_to_jd() {
+        // Test J2000.0 epoch (January 1, 2000, 12:00 TT)
+        let j2000 = Utc.with_ymd_and_hms(2000, 1, 1, 12, 0, 0).unwrap();
+        let jd = datetime_to_jd(j2000);
+        
+        // J2000.0 = JD 2451545.0
+        assert!((jd - 2451545.0).abs() < 0.1, "J2000 JD should be ~2451545.0");
+    }
+
+    #[test]
+    fn test_gmst() {
+        // Test GMST calculation for a known time
+        let dt = Utc.with_ymd_and_hms(2025, 10, 5, 0, 0, 0).unwrap();
+        let jd = datetime_to_jd(dt);
+        let gmst_radians = gmst_rad(jd);
+        
+        // GMST should be between 0 and 2π
+        assert!(gmst_radians >= 0.0 && gmst_radians < 2.0 * PI);
+    }
+
+    #[test]
+    fn test_teme_to_ecef() {
+        // Test coordinate transformation with a simple vector
+        let teme = Vector3::new(7000.0, 0.0, 0.0);
+        let dt = Utc.with_ymd_and_hms(2025, 10, 5, 0, 0, 0).unwrap();
+        
+        let jd = datetime_to_jd(dt);
+        let gmst_radians = gmst_rad(jd);
+        let rot = rot_z(gmst_radians);
+        let ecef = mat_mul_vec(&rot, &teme);
+        
+        // Magnitude should be preserved
+        assert!((ecef.norm() - teme.norm()).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_sun_position() {
+        // Test Sun position for a known date
+        let dt = Utc.with_ymd_and_hms(2025, 10, 5, 12, 0, 0).unwrap();
+        let jd = datetime_to_jd(dt);
+        let sun_eci = sun_position_eci(jd);
+        
+        // Sun distance should be approximately 1 AU
+        let distance = sun_eci.norm();
+        assert!(distance > 145_000_000.0 && distance < 153_000_000.0, 
+                "Sun distance should be ~1 AU (149.6 million km)");
+    }
+
+    #[test]
+    fn test_moon_position() {
+        // Test Moon position for a known date
+        let dt = Utc.with_ymd_and_hms(2025, 10, 5, 12, 0, 0).unwrap();
+        let jd = datetime_to_jd(dt);
+        let moon_eci = moon_position_eci(jd);
+        
+        // Moon distance should be between 356,000 and 406,000 km (perigee to apogee)
+        let distance = moon_eci.norm();
+        assert!(distance > 350_000.0 && distance < 410_000.0,
+                "Moon distance should be ~384,400 km ± range");
+    }
+
+    #[test]
+    fn test_altaz_conversion() {
+        // Test altitude/azimuth calculation
+        // Vector pointing straight up (zenith)
+        let zenith = Vector3::new(0.0, 0.0, 100.0);
+        let (alt, _az) = altaz(&zenith);
+        
+        assert!((alt - 90.0).abs() < 0.01, "Zenith altitude should be 90°");
+        
+        // Vector pointing north
+        let north = Vector3::new(-100.0, 0.0, 0.0);
+        let (alt_n, az_n) = altaz(&north);
+        
+        assert!((alt_n - 0.0).abs() < 0.01, "Horizon altitude should be 0°");
+        assert!((az_n - 0.0).abs() < 0.01, "North azimuth should be 0°");
+    }
+
+    #[test]
+    fn test_ecef_to_sez() {
+        // Test ECEF to SEZ (topocentric) transformation
+        let ecef_vec = Vector3::new(1000.0, 0.0, 0.0);
+        let lat_rad = 0.0; // Equator
+        let lon_rad = 0.0; // Prime meridian
+        
+        let sez = ecef_to_sez(&ecef_vec, lat_rad, lon_rad);
+        
+        // At equator and prime meridian, X ECEF should map to -X SEZ (south)
+        assert!((sez.x - 0.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_sgp4_propagation() {
+        // Test SGP4 propagation with a real ISS TLE
+        let tle1 = "1 25544U 98067A   25278.49802050  .00011384  00000+0  20935-3 0  9990";
+        let tle2 = "2 25544  51.6327 120.3420 0000884 206.2421 153.8523 15.49697304532279";
+        
+        let elements = sgp4::Elements::from_tle(
+            Some("ISS (ZARYA)".to_string()),
+            tle1.as_bytes(),
+            tle2.as_bytes(),
+        ).expect("Failed to parse TLE");
+        
+        // Test position at TLE epoch
+        let epoch_dt = DateTime::<Utc>::from_naive_utc_and_offset(elements.datetime, Utc);
+        
+        let pos = get_sat_position(&elements, epoch_dt);
+        assert!(pos.is_ok(), "SGP4 propagation should succeed");
+        
+        let teme_pos = pos.unwrap();
+        let altitude = teme_pos.norm() - EARTH_RADIUS_KM;
+        
+        // ISS altitude should be between 400-450 km typically
+        assert!(altitude > 350.0 && altitude < 500.0,
+                "ISS altitude should be ~400-450 km, got {}", altitude);
+    }
+
+    #[test]
+    fn test_angular_radius() {
+        // Helper function for tests
+        fn angular_radius_deg(radius_km: f64, distance_km: f64) -> f64 {
+            (radius_km / distance_km).asin().to_degrees()
+        }
+        
+        // Test angular radius calculation
+        // Sun at 1 AU should have angular radius ~0.267° (16 arcmin)
+        let sun_angular_rad_deg = angular_radius_deg(SUN_RADIUS_KM, AU_KM);
+        assert!((sun_angular_rad_deg - 0.267).abs() < 0.01,
+                "Sun angular radius should be ~0.267°");
+        
+        // Moon at mean distance should have angular radius ~0.259° (15.5 arcmin)
+        let moon_angular_rad_deg = angular_radius_deg(MOON_RADIUS_KM, 384_400.0);
+        assert!((moon_angular_rad_deg - 0.259).abs() < 0.01,
+                "Moon angular radius should be ~0.259°");
+    }
+
+    #[test]
+    fn test_calculate_transit_duration() {
+        // Test transit duration calculation
+        // Satellite crossing dead center of Sun at 0.3°/s
+        let sep_deg = 0.0;
+        let radius_deg = 0.267; // Sun radius
+        let speed = 0.3; // deg/s
+        
+        let duration = calculate_transit_duration(sep_deg, radius_deg, speed);
+        
+        // Duration = 2*radius/speed = 2*0.267/0.3 ≈ 1.78 seconds
+        assert!((duration - 1.78).abs() < 0.1,
+                "Central transit duration should be ~1.78s");
+        
+        // Test non-central transit
+        let sep_deg_offset = 0.15; // Offset from center
+        let duration_offset = calculate_transit_duration(sep_deg_offset, radius_deg, speed);
+        assert!(duration_offset < duration, "Off-center transit should be shorter");
+    }
+
+    #[test]
+    fn test_separation_calculation() {
+        // Test angular separation between two vectors
+        // Two identical vectors should have 0 separation
+        let v1 = Vector3::new(1.0, 0.0, 0.0);
+        let v2 = Vector3::new(1.0, 0.0, 0.0);
+        
+        let sep_rad = angle_between(&v1, &v2);
+        assert!(sep_rad.abs() < 0.001, "Identical vectors should have 0 separation");
+        
+        // Perpendicular vectors should have 90° separation
+        let v3 = Vector3::new(0.0, 1.0, 0.0);
+        let sep_rad_perp = angle_between(&v1, &v3);
+        assert!((sep_rad_perp - PI/2.0).abs() < 0.001,
+                "Perpendicular vectors should have π/2 separation");
     }
 }

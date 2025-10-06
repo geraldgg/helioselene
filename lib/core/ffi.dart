@@ -90,6 +90,16 @@ class NativeCore {
       _logger.info('[FFI] Raw JSON from native: $jsonStr');
       _freeJson(ptr);
       final List<dynamic> decoded = json.decode(jsonStr);
+      // Detect missing motion fields (likely stale native library not rebuilt with new struct)
+      if (decoded.isNotEmpty && decoded.first is Map<String,dynamic>) {
+        final m = decoded.first as Map<String,dynamic>;
+        final missingDir = !m.containsKey('motion_direction_deg');
+        final missingVelAlt = !m.containsKey('velocity_alt_deg_per_s');
+        final missingVelAz = !m.containsKey('velocity_az_deg_per_s');
+        if (missingDir || missingVelAlt || missingVelAz) {
+          _logger.warning('[FFI] Motion/direction fields absent in native JSON. Rebuild the Rust library (isscore) to include velocity & direction fields.');
+        }
+      }
       return decoded.map((e) => Transit.fromJson(e)).toList();
     } catch (e, st) {
       _logger.severe('[FFI] Exception: $e\n$st');
