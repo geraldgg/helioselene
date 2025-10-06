@@ -231,7 +231,11 @@ class _HomePageState extends State<HomePage> {
                           onTap: () {
                             Navigator.of(context).push(
                               MaterialPageRoute(
-                                builder: (_) => TransitDetailPage(transit: e),
+                                builder: (_) => TransitDetailPage(
+                                  transit: e,
+                                  observerLat: _lat!,
+                                  observerLon: _lon!,
+                                ),
                               ),
                             );
                           },
@@ -251,8 +255,8 @@ class _HomePageState extends State<HomePage> {
                                           final curved = CurvedAnimation(parent: animation, curve: Curves.easeInOut);
                                           final baseColor = e.body == 'Sun' ? Colors.orangeAccent : Colors.blueGrey;
                                           // Determine source and destination sizes
-                                          final fromSize = (fromContext?.findRenderObject() as RenderBox?)?.size;
-                                          final toSize = (toContext?.findRenderObject() as RenderBox?)?.size;
+                                          final fromSize = (fromContext.findRenderObject() as RenderBox?)?.size;
+                                          final toSize = (toContext.findRenderObject() as RenderBox?)?.size;
                                           final src = fromSize?.shortestSide ?? 56.0;
                                           final dstRaw = toSize?.shortestSide;
                                           // If destination size not yet known, assume a target upscale (e.g., 260)
