@@ -2,11 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:geolocator/geolocator.dart';
 import 'dart:ui' show lerpDouble; // added for hero scaling
+import 'dart:async' show unawaited; // for unawaited background futures
 import '../core/ffi.dart';
 import '../models/transit.dart';
 import '../models/satellite.dart';
 import '../widgets/transit_visual.dart'; // added for preview images
 import 'transit_detail.dart'; // navigation to detail page
+import 'location_picker_page.dart'; // added for manual location selection
+import 'package:http/http.dart' as http; // for fallback altitude lookup
+import 'dart:convert'; // for decoding elevation service
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -27,11 +31,42 @@ class _HomePageState extends State<HomePage> {
   double? _lon;
   double? _altM;
   bool _locating = false;
+  bool _autoAltFetching = false; // indicates background altitude fetch after GPS
 
   @override
   void initState() {
     super.initState();
     _initLocation();
+  }
+
+  // Fallback approximate altitude acquisition using Open-Elevation
+  Future<void> _maybeFetchApproxAltitude(double lat, double lon) async {
+    if (!mounted) return;
+    // If we already have a non-zero altitude (|alt| > ~1 m), skip
+    if (_altM != null && _altM!.abs() > 1.0) return;
+    setState(() { _autoAltFetching = true; });
+    try {
+      final uri = Uri.parse('https://api.open-elevation.com/api/v1/lookup?locations=' + lat.toStringAsFixed(6) + ',' + lon.toStringAsFixed(6));
+      final resp = await http.get(uri).timeout(const Duration(seconds: 6));
+      if (resp.statusCode == 200) {
+        final map = json.decode(resp.body) as Map<String, dynamic>;
+        final results = map['results'];
+        if (results is List && results.isNotEmpty) {
+          final elev = results.first['elevation'];
+          if (elev is num) {
+            if (!mounted) return; // safety
+            // Only override if altitude still unknown or ~0
+            if (_altM == null || _altM!.abs() <= 1.0) {
+              setState(() { _altM = elev.toDouble(); });
+            }
+          }
+        }
+      }
+    } catch (_) {
+      // silent fail; keep existing altitude
+    } finally {
+      if (mounted) setState(() { _autoAltFetching = false; });
+    }
   }
 
   Future<void> _initLocation() async {
@@ -46,12 +81,17 @@ class _HomePageState extends State<HomePage> {
       setState(() {
         _lat = pos.latitude;
         _lon = pos.longitude;
-        _altM = pos.altitude.isFinite ? pos.altitude : 0.0;
+        // Geolocator altitude may be 0 on some desktop platforms; capture but allow fallback.
+        _altM = (pos.altitude.isFinite) ? pos.altitude : null;
       });
+      if (_lat != null && _lon != null) {
+        // Trigger background approximate altitude fetch if current altitude is null/near zero.
+        unawaited(_maybeFetchApproxAltitude(_lat!, _lon!));
+      }
     } catch (e) {
       setState(() { _error = 'Failed to get location: $e'; });
     } finally {
-      setState(() { _locating = false; });
+      if (mounted) setState(() { _locating = false; });
     }
   }
 
@@ -130,12 +170,37 @@ class _HomePageState extends State<HomePage> {
     return dirs[idx];
   }
 
+  Future<void> _pickLocation() async {
+    if (_busy) return;
+    final result = await Navigator.of(context).push<LocationPickerResult>(
+      MaterialPageRoute(
+        builder: (_) => LocationPickerPage(
+          initialLat: _lat,
+          initialLon: _lon,
+        ),
+      ),
+    );
+    if (result != null) {
+      setState(() {
+        _lat = result.latitude;
+        _lon = result.longitude;
+        // Prefer picked altitude if available, else keep existing or 0
+        if (result.altitudeM != null && result.altitudeM!.isFinite) {
+          _altM = result.altitudeM;
+        } else {
+          _altM = _altM ?? 0.0;
+        }
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     // Use local time formatting now (no timezone label)
     final dateFmt = DateFormat('yyyy-MM-dd HH:mm:ss');
     final coordsText = (_lat != null && _lon != null)
-        ? 'Lat: ${_lat!.toStringAsFixed(5)}  Lon: ${_lon!.toStringAsFixed(5)}  Alt: ${(_altM ?? 0).toStringAsFixed(0)} m'
+        ? 'Lat: ${_lat!.toStringAsFixed(5)}  Lon: ${_lon!.toStringAsFixed(5)}  Alt: ' +
+            (_altM != null ? _altM!.toStringAsFixed(0) + ' m' + (_autoAltFetching && (_altM == null || _altM!.abs() <= 1.0) ? ' (updating…)':'') : (_autoAltFetching ? '…' : '—'))
         : _locating ? 'Locating…' : 'Location unknown';
     return Scaffold(
       appBar: AppBar(title: const Text('HelioSelene Transits')),
@@ -148,8 +213,13 @@ class _HomePageState extends State<HomePage> {
               children: [
                 Expanded(child: Text(coordsText)),
                 IconButton(
+                  icon: const Icon(Icons.map_outlined),
+                  tooltip: 'Pick location on map',
+                  onPressed: _busy ? null : _pickLocation,
+                ),
+                IconButton(
                   icon: const Icon(Icons.my_location),
-                  tooltip: 'Refresh location',
+                  tooltip: 'Refresh GPS location',
                   onPressed: _busy ? null : _initLocation,
                 ),
               ],
@@ -270,7 +340,7 @@ class _HomePageState extends State<HomePage> {
                                               final haloT = forward ? t : (1 - t);
                                               final haloOpacity = (1 - haloT) * 0.5; // fades out as it approaches
                                               final haloScale = lerpDouble(0.6, 1.3, haloT)!;
-                                              final scale = scaleTween.lerp(t);
+                                              final scale = scaleTween.transform(t);
                                               return Transform.scale(
                                                 scale: scale,
                                                 child: Stack(
@@ -285,8 +355,8 @@ class _HomePageState extends State<HomePage> {
                                                             shape: BoxShape.circle,
                                                             gradient: RadialGradient(
                                                               colors: [
-                                                                baseColor.withOpacity(0.35),
-                                                                baseColor.withOpacity(0.05),
+                                                                baseColor.withValues(alpha: 0.35),
+                                                                baseColor.withValues(alpha: 0.05),
                                                                 Colors.transparent,
                                                               ],
                                                               stops: const [0.0, 0.5, 1.0],

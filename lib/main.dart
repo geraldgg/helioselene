@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'screens/home_page.dart';
 import 'package:logging/logging.dart';
+import 'core/ffi.dart';
+import 'models/satellite.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -10,6 +12,14 @@ Future<void> main() async {
     // ignore: avoid_print
     print('${record.level.name}: ${record.time}: ${record.loggerName}: ${record.message}');
   });
+
+  // Warm TLE cache (non-blocking for UI after brief await to avoid jank)
+  try {
+    await NativeCore.prefetchTles(Satellite.supportedSatellites);
+  } catch (e) {
+    // ignore: avoid_print
+    print('Prefetch TLE failed: $e');
+  }
 
   runApp(const MyApp());
 }

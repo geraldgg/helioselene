@@ -162,6 +162,21 @@ class NativeCore {
   static Future<void> clearTleCacheForSatellite(Satellite sat) async => _TleCache.clearForSatellite(sat.noradId);
   static Future<void> clearAllTleCache() async => _TleCache.clearAll();
   static Future<void> forceRefreshTleForSatellite(Satellite sat) async => _TleCache.forceRefresh(sat);
+  static Future<void> prefetchTles(List<Satellite> satellites) async {
+    // Fire network/cache retrieval for each satellite to warm cache.
+    for (final sat in satellites) {
+      try {
+        final res = await _TleCache.getTleLines(sat);
+        if (res != null) {
+          _logger.fine('[Prefetch] Cached TLE for ${sat.name}');
+        } else {
+          _logger.fine('[Prefetch] No TLE (yet) for ${sat.name}');
+        }
+      } catch (e, st) {
+        _logger.fine('[Prefetch] Exception for ${sat.name}: $e\n$st');
+      }
+    }
+  }
 }
 
 class _TleCache {
