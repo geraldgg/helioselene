@@ -7,6 +7,10 @@ import 'core/ffi.dart';
 import 'core/shared_tile_provider.dart';
 import 'core/notification_service.dart';
 import 'models/satellite.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:intl/intl.dart';
+import 'dart:convert';
+import 'package:flutter/services.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -90,7 +94,58 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
         useMaterial3: true,
       ),
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      supportedLocales: const [
+        Locale('en', ''), // English
+        Locale('fr', ''), // French
+      ],
       home: const HomePage(),
+    );
+  }
+}
+
+class MyHomePage extends StatefulWidget {
+  const MyHomePage({super.key});
+
+  @override
+  State<MyHomePage> createState() => _MyHomePageState();
+}
+
+class _MyHomePageState extends State<MyHomePage> {
+  late Map<String, String> _localizedStrings;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLocalizedStrings();
+  }
+
+  Future<void> _loadLocalizedStrings() async {
+    final locale = Localizations.localeOf(context);
+    final jsonString = await rootBundle.loadString('assets/l10n/${locale.languageCode}.json');
+    final Map<String, dynamic> jsonMap = json.decode(jsonString);
+    setState(() {
+      _localizedStrings = jsonMap.map((key, value) => MapEntry(key, value.toString()));
+    });
+  }
+
+  String translate(String key) {
+    return _localizedStrings[key] ?? key;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(translate('appTitle')),
+      ),
+      body: Center(
+        child: Text(translate('welcomeMessage')),
+      ),
     );
   }
 }

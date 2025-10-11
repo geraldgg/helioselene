@@ -6,6 +6,8 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'dart:math' as math;
 import '../core/shared_tile_provider.dart';
+import 'package:flutter/services.dart';
+import 'dart:convert';
 
 class TransitDetailPage extends StatefulWidget {
   final Transit transit;
@@ -20,6 +22,59 @@ class TransitDetailPage extends StatefulWidget {
 class _TransitDetailPageState extends State<TransitDetailPage> {
   bool _expanded = false;
 
+  // i18n cache for this page
+  Map<String, String> _i18n = {};
+  Locale? _i18nLocale;
+  bool _loadingI18n = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final locale = Localizations.localeOf(context);
+    if (_i18nLocale != locale) {
+      _loadTranslations(locale);
+    }
+  }
+
+  Future<void> _loadTranslations(Locale locale) async {
+    if (_loadingI18n) return;
+    _loadingI18n = true;
+    try {
+      final jsonString = await rootBundle.loadString('assets/l10n/${locale.languageCode}.json');
+      final Map<String, dynamic> jsonMap = json.decode(jsonString);
+      if (mounted) {
+        setState(() {
+          _i18n = jsonMap.map((k, v) => MapEntry(k, v.toString()));
+          _i18nLocale = locale;
+        });
+      } else {
+        _i18n = jsonMap.map((k, v) => MapEntry(k, v.toString()));
+        _i18nLocale = locale;
+      }
+    } catch (_) {
+      // Fallback silently, keys will be shown.
+    } finally {
+      _loadingI18n = false;
+    }
+  }
+
+  String tr(String key) => _i18n[key] ?? key;
+  String _kindLabel(String kind) {
+    switch (kind.toLowerCase()) {
+      case 'transit': return tr('kindTransit');
+      case 'reachable': return tr('kindReachable');
+      case 'near':
+      default: return tr('kindNear');
+    }
+  }
+  String _bodyLabel(String body) {
+    switch (body.toLowerCase()) {
+      case 'sun': return tr('bodySun');
+      case 'moon': return tr('bodyMoon');
+      default: return body;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final transit = widget.transit;
@@ -27,23 +82,23 @@ class _TransitDetailPageState extends State<TransitDetailPage> {
     final observerLon = widget.observerLon;
     final chordInfo = ChordInfo.fromTransit(transit, repaintKey: GlobalKey());
     final summaryItems = <Widget>[
-      Text('When (local): ${transit.timeUtc.toLocal()}'),
-      Text('Satellite: ${transit.satellite ?? 'Unknown'}'),
-      Text('Distance: ${transit.issRangeKm.toStringAsFixed(0)} km  •  Duration: ${transit.durationSeconds.toStringAsFixed(2)} s'),
-      Text('Angular sep: ${transit.minSeparationArcmin.toStringAsFixed(2)} arcmin'),
-      if (chordInfo.isTransit) Text('Chord: ${chordInfo.chordArcmin.toStringAsFixed(2)} arcmin (${(chordInfo.chordArcmin / (2 * transit.targetRadiusArcmin)).toStringAsFixed(2)} dia)')
+      Text('${tr('whenLabel')}: ${transit.timeUtc.toLocal()}'),
+      Text('${tr('satelliteLabel')}: ${transit.satellite ?? tr('unknownLabel')}'),
+      Text('${tr('distanceLabel')}: ${transit.issRangeKm.toStringAsFixed(0)} km  •  ${tr('durationLabel')}: ${transit.durationSeconds.toStringAsFixed(2)} s'),
+      Text('${tr('angularSeparationLabel')}: ${transit.minSeparationArcmin.toStringAsFixed(2)} arcmin'),
+      if (chordInfo.isTransit) Text('${tr('chordLabel')}: ${chordInfo.chordArcmin.toStringAsFixed(2)} arcmin (${(chordInfo.chordArcmin / (2 * transit.targetRadiusArcmin)).toStringAsFixed(2)} dia)'),
     ];
 
     final detailedItems = <Widget>[
-      Text('Altitude: Sat ${transit.satAltitudeDeg.toStringAsFixed(1)}° / Body ${transit.bodyAltitudeDeg.toStringAsFixed(1)}°'),
-      Text('Azimuth: ${transit.satAzDeg.toStringAsFixed(1)}°'),
-      Text('Target radius: ${transit.targetRadiusArcmin.toStringAsFixed(2)} arcmin'),
-      Text('Motion dir: ${transit.motionDirectionDeg.toStringAsFixed(1)}°'),
-      Text('vAlt: ${transit.velocityAltDegPerS.toStringAsFixed(3)}°/s  vAz: ${transit.velocityAzDegPerS.toStringAsFixed(3)}°/s'),
+      Text('${tr('altitudeLabel')}: ${tr('satelliteLabel')} ${transit.satAltitudeDeg.toStringAsFixed(1)}° / ${tr('bodyLabel')} ${transit.bodyAltitudeDeg.toStringAsFixed(1)}°'),
+      Text('${tr('azimuthLabel')}: ${transit.satAzDeg.toStringAsFixed(1)}°'),
+      Text('${tr('targetRadiusLabel')}: ${transit.targetRadiusArcmin.toStringAsFixed(2)} arcmin'),
+      Text('${tr('motionDirectionLabel')}: ${transit.motionDirectionDeg.toStringAsFixed(1)}°'),
+      Text('${tr('vAltLabel')}: ${transit.velocityAltDegPerS.toStringAsFixed(3)}°/s  ${tr('vAzLabel')}: ${transit.velocityAzDegPerS.toStringAsFixed(3)}°/s'),
     ];
 
     return Scaffold(
-      appBar: AppBar(title: Text('${transit.body} ${transit.kind}')),
+      appBar: AppBar(title: Text('${_bodyLabel(transit.body)} - ${_kindLabel(transit.kind)}')),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(16),
@@ -65,7 +120,7 @@ class _TransitDetailPageState extends State<TransitDetailPage> {
                         style: TextButton.styleFrom(padding: EdgeInsets.zero),
                         onPressed: () => setState(() => _expanded = !_expanded),
                         icon: Icon(_expanded ? Icons.expand_less : Icons.expand_more),
-                        label: Text(_expanded ? 'Less' : 'More'),
+                        label: Text(_expanded ? tr('lessLabel') : tr('moreLabel')),
                       ),
                     ),
                   ],
@@ -114,7 +169,7 @@ class _TransitDetailPageState extends State<TransitDetailPage> {
               const SizedBox(height: 12),
               ElevatedButton.icon(
                 icon: const Icon(Icons.map),
-                label: const Text('Show visibility map'),
+                label: Text(tr('showVisibilityMapLabel')),
                 onPressed: () {
                   Navigator.of(context).push(
                     MaterialPageRoute(

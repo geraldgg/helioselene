@@ -12,6 +12,7 @@ import 'transit_detail.dart'; // navigation to detail page
 import 'location_picker_page.dart'; // added for manual location selection
 import 'package:http/http.dart' as http; // for fallback altitude lookup
 import 'dart:convert'; // for decoding elevation service
+import 'package:flutter/services.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -34,10 +35,64 @@ class _HomePageState extends State<HomePage> {
   double? _altM;
   bool _autoAltFetching = false; // indicates background altitude fetch after GPS
 
+  // --- Simple in-memory translations cache for this page ---
+  Map<String, String> _i18n = {};
+  Locale? _i18nLocale; // which locale the map corresponds to
+  bool _loadingI18n = false;
+
   @override
   void initState() {
     super.initState();
     _initLocation();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final locale = Localizations.localeOf(context);
+    if (_i18nLocale != locale) {
+      _loadTranslations(locale);
+    }
+  }
+
+  Future<void> _loadTranslations(Locale locale) async {
+    if (_loadingI18n) return;
+    _loadingI18n = true;
+    try {
+      final jsonString = await rootBundle.loadString('assets/l10n/${locale.languageCode}.json');
+      final Map<String, dynamic> jsonMap = json.decode(jsonString);
+      if (mounted) {
+        setState(() {
+          _i18n = jsonMap.map((k, v) => MapEntry(k, v.toString()));
+          _i18nLocale = locale;
+        });
+      } else {
+        _i18n = jsonMap.map((k, v) => MapEntry(k, v.toString()));
+        _i18nLocale = locale;
+      }
+    } catch (_) {
+      // If load fails, we silently fall back to keys.
+    } finally {
+      _loadingI18n = false;
+    }
+  }
+
+  String tr(String key) => _i18n[key] ?? key; // synchronous lookup
+
+  String _kindLabel(String kind) {
+    switch (kind.toLowerCase()) {
+      case 'transit': return tr('kindTransit');
+      case 'reachable': return tr('kindReachable');
+      case 'near':
+      default: return tr('kindNear');
+    }
+  }
+  String _bodyLabel(String body) {
+    switch (body.toLowerCase()) {
+      case 'sun': return tr('bodySun');
+      case 'moon': return tr('bodyMoon');
+      default: return body; // fallback
+    }
   }
 
   // Fallback approximate altitude acquisition using Open-Elevation
@@ -205,7 +260,7 @@ class _HomePageState extends State<HomePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('HelioSelene Transit'),
+        title: Text(tr('appTitle')),
         actions: [
           IconButton(
             icon: const Icon(Icons.settings),
@@ -242,11 +297,11 @@ class _HomePageState extends State<HomePage> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('Your location', style: Theme.of(context).textTheme.labelMedium),
+                          Text(tr('yourLocationLabel'), style: Theme.of(context).textTheme.labelMedium),
                           const SizedBox(height: 4),
-                          Text('Lat: ${_lat?.toStringAsFixed(5) ?? '—'}'),
-                          Text('Lon: ${_lon?.toStringAsFixed(5) ?? '—'}'),
-                          Text('Alt: ${_altM != null ? '${_altM!.toStringAsFixed(0)} m${(_autoAltFetching && (_altM == null || _altM!.abs() <= 1.0)) ? ' (updating…)' : ''}' : (_autoAltFetching ? '…' : '—')}'),
+                          Text('${tr('latitudeLabel')}: ${_lat?.toStringAsFixed(5) ?? '—'}'),
+                          Text('${tr('longitudeLabel')}: ${_lon?.toStringAsFixed(5) ?? '—'}'),
+                          Text('${tr('altitudeLabel')}: ${_altM != null ? '${_altM!.toStringAsFixed(0)} m${(_autoAltFetching && (_altM == null || _altM!.abs() <= 1.0)) ? ' (${tr('updatingLabel')})' : ''}' : (_autoAltFetching ? '…' : '—')}'),
                         ],
                       ),
                     ),
@@ -275,7 +330,7 @@ class _HomePageState extends State<HomePage> {
                   child: ElevatedButton.icon(
                     onPressed: _busy ? null : _runPrediction,
                     icon: const Icon(Icons.auto_awesome),
-                    label: const Text('Predict next 15 days'),
+                    label: Text(tr('predictNext15DaysLabel')),
                   ),
                 ),
               ],
@@ -304,7 +359,7 @@ class _HomePageState extends State<HomePage> {
                             ? e.durationSeconds.toStringAsFixed(2)
                             : '-';
                         final dir = _compassDir(e.satAzDeg);
-                        // Custom row to ensure vertical centering between preview and text
+                        final kindText = _kindLabel(e.kind);
                         return InkWell(
                           onTap: () {
                             Navigator.of(context).push(
@@ -413,20 +468,20 @@ class _HomePageState extends State<HomePage> {
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
                                       Text(
-                                        '${e.body} — ${e.kind}',
+                                        '${_bodyLabel(e.body)} - $kindText',
                                         style: Theme.of(context).textTheme.titleSmall,
                                       ),
                                       const SizedBox(height: 2),
                                       Text(
-                                        'When: ${dateFmt.format(localTime)}',
+                                        '${tr('whenLabel')}: ${dateFmt.format(localTime)}',
                                         style: Theme.of(context).textTheme.bodySmall,
                                       ),
                                       Text(
-                                        'Distance: ${e.issRangeKm.toStringAsFixed(0)} km  Dur: $durationStr s',
+                                        '${tr('distanceLabel')}: ${e.issRangeKm.toStringAsFixed(0)} km  ${tr('durationLabel')}: $durationStr s',
                                         style: Theme.of(context).textTheme.bodySmall,
                                       ),
                                       Text(
-                                        'Alt: ${e.satAltitudeDeg.toStringAsFixed(1)}°  Az: ${e.satAzDeg.toStringAsFixed(1)}° ${dir.isNotEmpty ? '($dir)' : ''}',
+                                        '${tr('altitudeLabel')}: ${e.satAltitudeDeg.toStringAsFixed(1)}°  Az: ${e.satAzDeg.toStringAsFixed(1)}° ${dir.isNotEmpty ? '($dir)' : ''}',
                                         style: Theme.of(context).textTheme.bodySmall,
                                       ),
                                     ],
@@ -495,22 +550,62 @@ class _SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<_SettingsPage> {
   late List<Satellite> _satellites;
   late double _maxDistanceKm;
+
+  // Local translations cache (reuse approach from HomePage)
+  Map<String, String> _i18n = {};
+  Locale? _i18nLocale;
+  bool _loadingI18n = false;
+
   @override
   void initState() {
     super.initState();
     _satellites = widget.satellites.map((s) => Satellite(name: s.name, noradId: s.noradId, tleUrl: s.tleUrl, selected: s.selected)).toList();
     _maxDistanceKm = widget.maxDistanceKm;
   }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final locale = Localizations.localeOf(context);
+    if (_i18nLocale != locale) {
+      _loadTranslations(locale);
+    }
+  }
+
+  Future<void> _loadTranslations(Locale locale) async {
+    if (_loadingI18n) return;
+    _loadingI18n = true;
+    try {
+      final jsonString = await rootBundle.loadString('assets/l10n/${locale.languageCode}.json');
+      final Map<String, dynamic> jsonMap = json.decode(jsonString);
+      if (mounted) {
+        setState(() {
+          _i18n = jsonMap.map((k, v) => MapEntry(k, v.toString()));
+          _i18nLocale = locale;
+        });
+      } else {
+        _i18n = jsonMap.map((k, v) => MapEntry(k, v.toString()));
+        _i18nLocale = locale;
+      }
+    } catch (_) {
+      // Ignore failures; keys will show.
+    } finally {
+      _loadingI18n = false;
+    }
+  }
+
+  String tr(String key) => _i18n[key] ?? key;
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+      appBar: AppBar(title: Text(tr('settingsLabel'))),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Satellites', style: Theme.of(context).textTheme.titleMedium),
+            Text(tr('satellitesLabel'), style: Theme.of(context).textTheme.titleMedium),
             ..._satellites.map((sat) => CheckboxListTile(
               title: Text(sat.name),
               value: sat.selected,
@@ -519,7 +614,7 @@ class _SettingsPageState extends State<_SettingsPage> {
               },
             )),
             const SizedBox(height: 16),
-            Text('Max travel distance (km)', style: Theme.of(context).textTheme.titleMedium),
+            Text(tr('maxTravelDistanceLabel'), style: Theme.of(context).textTheme.titleMedium),
             Slider(
               min: 0,
               max: 100,
@@ -529,22 +624,22 @@ class _SettingsPageState extends State<_SettingsPage> {
               onChanged: (v) { setState(() { _maxDistanceKm = v; }); },
             ),
             const SizedBox(height: 24),
-            Text('Notifications', style: Theme.of(context).textTheme.titleMedium),
+            Text(tr('notificationsLabel'), style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
             ElevatedButton.icon(
               onPressed: () async {
                 await NotificationService.sendTestNotification();
                 if (mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Test notification sent! Check your notification panel.'),
-                      duration: Duration(seconds: 3),
+                    SnackBar(
+                      content: Text(tr('testNotificationContent')),
+                      duration: const Duration(seconds: 3),
                     ),
                   );
                 }
               },
               icon: const Icon(Icons.notifications),
-              label: const Text('Test Notifications'),
+              label: Text(tr('testNotificationsLabel')),
             ),
             const SizedBox(height: 16),
             ElevatedButton(
@@ -552,7 +647,7 @@ class _SettingsPageState extends State<_SettingsPage> {
                 widget.onSave(_satellites, _maxDistanceKm);
                 Navigator.of(context).pop();
               },
-              child: const Text('Save'),
+              child: Text(tr('saveLabel')),
             ),
           ],
         ),

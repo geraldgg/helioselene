@@ -70,13 +70,20 @@ class Transit {
       arcmin = 0.0;
     }
 
-    // --- Kind normalization ---
+    // --- Kind normalization (model stays presentation-agnostic; UI translates) ---
     String rawKind = (j['kind'] ?? 'Near').toString();
     switch (rawKind.toLowerCase()) {
       case 'transit': rawKind = 'Transit'; break;
-      case 'near': rawKind = 'Near'; break;
+      case 'near':
+      case 'nearby':
+      case 'close': rawKind = 'Near'; break;
       case 'reachable': rawKind = 'Reachable'; break;
-      default: break;
+      default:
+        if (rawKind.isNotEmpty) {
+          rawKind = rawKind[0].toUpperCase() + rawKind.substring(1);
+        } else {
+          rawKind = 'Near';
+        }
     }
 
     // --- Field extraction with fallbacks matching Rust JSON ---

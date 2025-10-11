@@ -4,6 +4,8 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import '../models/transit.dart';
 import '../core/shared_tile_provider.dart';
+import 'package:flutter/services.dart';
+import 'dart:convert';
 
 /// Page displaying an approximate ground visibility region for the selected transit.
 /// NOTE: This is an approximation: we model the area in which moving could turn a near/reachable
@@ -22,10 +24,62 @@ class TransitMapPage extends StatefulWidget {
 class _TransitMapPageState extends State<TransitMapPage> {
   late final MapController _mapController;
 
+  Map<String, String> _i18n = {};
+  Locale? _i18nLocale;
+  bool _loadingI18n = false;
+
   @override
   void initState() {
     super.initState();
     _mapController = MapController();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final locale = Localizations.localeOf(context);
+    if (_i18nLocale != locale) {
+      _loadTranslations(locale);
+    }
+  }
+
+  Future<void> _loadTranslations(Locale locale) async {
+    if (_loadingI18n) return;
+    _loadingI18n = true;
+    try {
+      final jsonString = await rootBundle.loadString('assets/l10n/${locale.languageCode}.json');
+      final Map<String, dynamic> jsonMap = json.decode(jsonString);
+      if (mounted) {
+        setState(() {
+          _i18n = jsonMap.map((k, v) => MapEntry(k, v.toString()));
+          _i18nLocale = locale;
+        });
+      } else {
+        _i18n = jsonMap.map((k, v) => MapEntry(k, v.toString()));
+        _i18nLocale = locale;
+      }
+    } catch (_) {
+      // silent fail; keys used
+    } finally {
+      _loadingI18n = false;
+    }
+  }
+
+  String tr(String key) => _i18n[key] ?? key;
+  String _kindLabel(String kind) {
+    switch (kind.toLowerCase()) {
+      case 'transit': return tr('kindTransit');
+      case 'reachable': return tr('kindReachable');
+      case 'near':
+      default: return tr('kindNear');
+    }
+  }
+  String _bodyLabel(String body) {
+    switch (body.toLowerCase()) {
+      case 'sun': return tr('bodySun');
+      case 'moon': return tr('bodyMoon');
+      default: return body;
+    }
   }
 
   double _targetRadiusGroundKm() {
@@ -98,7 +152,7 @@ class _TransitMapPageState extends State<TransitMapPage> {
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(title: Text('Visibility Map — ${widget.transit.body}')),
+      appBar: AppBar(title: Text(tr('visibilityMapTitle'))),
       body: LayoutBuilder(
         builder: (context, constraints) {
           final size = constraints.biggest;
@@ -245,7 +299,7 @@ class _TransitMapPageState extends State<TransitMapPage> {
                                 children: [
                                   Icon(Icons.info_outline, size: 16, color: theme.colorScheme.primary),
                                   const SizedBox(width: 6),
-                                  Text('${widget.transit.body} ${widget.transit.kind.toUpperCase()}', style: theme.textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w600)),
+                                  Text('${_bodyLabel(widget.transit.body)} - ${_kindLabel(widget.transit.kind)}', style: theme.textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w600)),
                                   const Spacer(),
                                   // Small legend dot for user position label moved off map
                                   Row(
@@ -259,7 +313,7 @@ class _TransitMapPageState extends State<TransitMapPage> {
                                         ),
                                       ),
                                       const SizedBox(width: 4),
-                                      Text('You', style: theme.textTheme.labelSmall),
+                                      Text(tr('youLabel'), style: theme.textTheme.labelSmall),
                                       const SizedBox(width: 12),
                                       Container(
                                         width: 10,
@@ -270,30 +324,30 @@ class _TransitMapPageState extends State<TransitMapPage> {
                                         ),
                                       ),
                                       const SizedBox(width: 4),
-                                      Text('Direction', style: theme.textTheme.labelSmall?.copyWith(color: Colors.redAccent)),
+                                      Text(tr('directionLabel'), style: theme.textTheme.labelSmall?.copyWith(color: Colors.redAccent)),
                                     ],
                                   ),
                                 ],
                               ),
                               const SizedBox(height: 6),
-                              Text('Event time: ${widget.transit.timeUtc.toLocal()}'),
-                              Text('Satellite range: ${widget.transit.issRangeKm.toStringAsFixed(0)} km'),
+                              Text('${tr('eventTimeLabel')}: ${widget.transit.timeUtc.toLocal()}'),
+                              Text('${tr('satelliteRangeLabel')}: ${widget.transit.issRangeKm.toStringAsFixed(0)} km'),
                               if (innerRadiusKm > 0)
-                                Text('Corridor width (inner): ${innerRadiusKm.toStringAsFixed(2)} km'),
+                                Text('${tr('corridorWidthLabel')}: ${innerRadiusKm.toStringAsFixed(2)} km'),
                               if (outerRadiusKm > 0)
-                                Text('Reach / parallax zone (outer): ${outerRadiusKm.toStringAsFixed(2)} km'),
+                                Text('${tr('reachZoneLabel')}: ${outerRadiusKm.toStringAsFixed(2)} km'),
                               if (widget.transit.kind.toLowerCase() != 'transit') ...[
                                 const SizedBox(height: 6),
-                                const Text('Tip: Move inside the inner circle near event time to maximize transit chance.'),
+                                Text(tr('tipLabel')),
                               ],
                               const SizedBox(height: 8),
                               Text(
-                                'Direction to look (azimuth): ${widget.transit.satAzDeg.toStringAsFixed(1)}°',
+                                '${tr('directionToLookLabel')}: ${widget.transit.satAzDeg.toStringAsFixed(1)}°',
                                 style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.secondary),
                               ),
                               const SizedBox(height: 4),
                               Text(
-                                'Note: Visualization approximate; for precise ground track more modeling is required.',
+                                tr('approxNoteLabel'),
                                 style: theme.textTheme.bodySmall?.copyWith(fontSize: (theme.textTheme.bodySmall?.fontSize ?? 12) - 1, color: theme.colorScheme.onSurface.withValues(alpha: 0.65)),
                               ),
                             ],
