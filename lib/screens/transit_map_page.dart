@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import '../models/transit.dart';
+import '../core/shared_tile_provider.dart';
 
 /// Page displaying an approximate ground visibility region for the selected transit.
 /// NOTE: This is an approximation: we model the area in which moving could turn a near/reachable
@@ -122,7 +123,7 @@ class _TransitMapPageState extends State<TransitMapPage> {
                       TileLayer(
                         urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                         userAgentPackageName: 'helioselene',
-                        tileProvider: NetworkTileProvider(),
+                        tileProvider: SharedTileProvider.osm,
                       ),
                       CircleLayer(circles: [
                         if (outerRadiusKm > 0)

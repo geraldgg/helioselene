@@ -5,17 +5,43 @@ import 'transit_map_page.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'dart:math' as math;
+import '../core/shared_tile_provider.dart';
 
-class TransitDetailPage extends StatelessWidget {
+class TransitDetailPage extends StatefulWidget {
   final Transit transit;
   final double observerLat;
   final double observerLon;
   const TransitDetailPage({super.key, required this.transit, required this.observerLat, required this.observerLon});
 
   @override
+  State<TransitDetailPage> createState() => _TransitDetailPageState();
+}
+
+class _TransitDetailPageState extends State<TransitDetailPage> {
+  bool _expanded = false;
+
+  @override
   Widget build(BuildContext context) {
-    // Compute chord info (with its own repaint key) for reuse in visualization + image export
+    final transit = widget.transit;
+    final observerLat = widget.observerLat;
+    final observerLon = widget.observerLon;
     final chordInfo = ChordInfo.fromTransit(transit, repaintKey: GlobalKey());
+    final summaryItems = <Widget>[
+      Text('When (local): ${transit.timeUtc.toLocal()}'),
+      Text('Satellite: ${transit.satellite ?? 'Unknown'}'),
+      Text('Distance: ${transit.issRangeKm.toStringAsFixed(0)} km  •  Duration: ${transit.durationSeconds.toStringAsFixed(2)} s'),
+      Text('Angular sep: ${transit.minSeparationArcmin.toStringAsFixed(2)} arcmin'),
+      if (chordInfo.isTransit) Text('Chord: ${chordInfo.chordArcmin.toStringAsFixed(2)} arcmin (${(chordInfo.chordArcmin / (2 * transit.targetRadiusArcmin)).toStringAsFixed(2)} dia)')
+    ];
+
+    final detailedItems = <Widget>[
+      Text('Altitude: Sat ${transit.satAltitudeDeg.toStringAsFixed(1)}° / Body ${transit.bodyAltitudeDeg.toStringAsFixed(1)}°'),
+      Text('Azimuth: ${transit.satAzDeg.toStringAsFixed(1)}°'),
+      Text('Target radius: ${transit.targetRadiusArcmin.toStringAsFixed(2)} arcmin'),
+      Text('Motion dir: ${transit.motionDirectionDeg.toStringAsFixed(1)}°'),
+      Text('vAlt: ${transit.velocityAltDegPerS.toStringAsFixed(3)}°/s  vAz: ${transit.velocityAzDegPerS.toStringAsFixed(3)}°/s'),
+    ];
+
     return Scaffold(
       appBar: AppBar(title: Text('${transit.body} ${transit.kind}')),
       body: SafeArea(
@@ -24,17 +50,27 @@ class TransitDetailPage extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text('When (local): ${transit.timeUtc.toLocal()}'),
-              Text('Satellite: ${transit.satellite ?? 'Unknown'}'),
-              Text('Body: ${transit.body}'),
-              Text('Distance: ${transit.issRangeKm.toStringAsFixed(0)} km'),
-              Text('Altitude: ${transit.satAltitudeDeg.toStringAsFixed(1)}°  Body alt: ${transit.bodyAltitudeDeg.toStringAsFixed(1)}°'),
-              Text('Azimuth: ${transit.satAzDeg.toStringAsFixed(1)}°'),
-              Text('Duration: ${transit.durationSeconds.toStringAsFixed(2)} s'),
-              Text('Angular sep: ${transit.minSeparationArcmin.toStringAsFixed(2)} arcmin'),
-              Text('Target radius: ${transit.targetRadiusArcmin.toStringAsFixed(2)} arcmin'),
-              Text('Motion dir: ${transit.motionDirectionDeg.toStringAsFixed(1)}°  vAlt: ${transit.velocityAltDegPerS.toStringAsFixed(3)}°/s  vAz: ${transit.velocityAzDegPerS.toStringAsFixed(3)}°/s'),
-              if (chordInfo.isTransit) Text('Chord length: ${chordInfo.chordArcmin.toStringAsFixed(2)} arcmin (fraction of diameter ${(chordInfo.chordArcmin / (2 * transit.targetRadiusArcmin)).toStringAsFixed(2)})'),
+              // Summary block + expand toggle
+              AnimatedSize(
+                duration: const Duration(milliseconds: 250),
+                curve: Curves.easeInOut,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    ...summaryItems,
+                    if (_expanded) ...detailedItems.map((w) => Padding(padding: const EdgeInsets.only(top: 2), child: w)),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        style: TextButton.styleFrom(padding: EdgeInsets.zero),
+                        onPressed: () => setState(() => _expanded = !_expanded),
+                        icon: Icon(_expanded ? Icons.expand_less : Icons.expand_more),
+                        label: Text(_expanded ? 'Less' : 'More'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
               const SizedBox(height: 12),
               Center(
                 child: Hero(
@@ -53,10 +89,27 @@ class TransitDetailPage extends StatelessWidget {
               ),
               const SizedBox(height: 16),
               // Mini static map preview
-              _MiniTransitMap(
-                transit: transit,
-                observerLat: observerLat,
-                observerLon: observerLon,
+              Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(12),
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => TransitMapPage(
+                          transit: transit,
+                          observerLat: observerLat,
+                          observerLon: observerLon,
+                        ),
+                      ),
+                    );
+                  },
+                  child: _MiniTransitMap(
+                    transit: transit,
+                    observerLat: observerLat,
+                    observerLon: observerLon,
+                  ),
+                ),
               ),
               const SizedBox(height: 12),
               ElevatedButton.icon(
@@ -117,58 +170,60 @@ class _MiniTransitMap extends StatelessWidget {
         aspectRatio: 16 / 9,
         child: Stack(
           children: [
-            FlutterMap(
-              options: MapOptions(
-                initialCenter: center,
-                initialZoom: zoom,
-                interactionOptions: const InteractionOptions(
-                  flags: InteractiveFlag.none, // static preview
+            IgnorePointer( // ensure map preview doesn't consume taps so InkWell works
+              child: FlutterMap(
+                options: MapOptions(
+                  initialCenter: center,
+                  initialZoom: zoom,
+                  interactionOptions: const InteractionOptions(
+                    flags: InteractiveFlag.none, // static preview
+                  ),
                 ),
+                children: [
+                  TileLayer(
+                    urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                    userAgentPackageName: 'helioselene',
+                    tileProvider: SharedTileProvider.osm,
+                  ),
+                  PolylineLayer(polylines: [
+                    Polyline(
+                      points: [center, look],
+                      color: Colors.redAccent,
+                      strokeWidth: 3,
+                    ),
+                  ]),
+                  MarkerLayer(markers: [
+                    Marker(
+                      point: center,
+                      width: 32,
+                      height: 32,
+                      alignment: Alignment.center,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: theme.colorScheme.primary.withValues(alpha: 0.15),
+                          border: Border.all(color: theme.colorScheme.primary, width: 2),
+                        ),
+                        child: const Center(child: Icon(Icons.my_location, size: 16)),
+                      ),
+                    ),
+                    Marker(
+                      point: look,
+                      width: 44,
+                      height: 44,
+                      alignment: Alignment.center,
+                      child: Transform.rotate(
+                        angle: transit.satAzDeg * math.pi / 180.0,
+                        child: Icon(
+                          Icons.navigation,
+                          size: 34,
+                          color: Colors.redAccent,
+                        ),
+                      ),
+                    ),
+                  ]),
+                ],
               ),
-              children: [
-                TileLayer(
-                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                  userAgentPackageName: 'helioselene',
-                  tileProvider: NetworkTileProvider(),
-                ),
-                PolylineLayer(polylines: [
-                  Polyline(
-                    points: [center, look],
-                    color: Colors.redAccent,
-                    strokeWidth: 3,
-                  ),
-                ]),
-                MarkerLayer(markers: [
-                  Marker(
-                    point: center,
-                    width: 32,
-                    height: 32,
-                    alignment: Alignment.center,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: theme.colorScheme.primary.withOpacity(0.15),
-                        border: Border.all(color: theme.colorScheme.primary, width: 2),
-                      ),
-                      child: const Center(child: Icon(Icons.my_location, size: 16)),
-                    ),
-                  ),
-                  Marker(
-                    point: look,
-                    width: 44,
-                    height: 44,
-                    alignment: Alignment.center,
-                    child: Transform.rotate(
-                      angle: transit.satAzDeg * math.pi / 180.0,
-                      child: Icon(
-                        Icons.navigation,
-                        size: 34,
-                        color: Colors.redAccent,
-                      ),
-                    ),
-                  ),
-                ]),
-              ],
             ),
             Positioned(
               top: 6,
@@ -176,7 +231,7 @@ class _MiniTransitMap extends StatelessWidget {
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.45),
+                  color: Colors.black.withValues(alpha: 0.45),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
@@ -192,20 +247,7 @@ class _MiniTransitMap extends StatelessWidget {
 
     return Hero(
       tag: 'map-${transit.timeUtc.toIso8601String()}',
-      child: GestureDetector(
-        onTap: () {
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (_) => TransitMapPage(
-                transit: transit,
-                observerLat: observerLat,
-                observerLon: observerLon,
-              ),
-            ),
-          );
-        },
-        child: map,
-      ),
+      child: map,
     );
   }
 }

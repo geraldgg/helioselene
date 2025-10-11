@@ -183,7 +183,7 @@ class _TleCache {
   static const _ttl = Duration(hours: 12);
   static const _maxStale = Duration(days: 3); // fallback usage window
 
-  static String _key(int noradId) => 'tle_cache_' + noradId.toString();
+  static String _key(int noradId) => 'tle_cache_$noradId';
 
   static Future<(String,String)?> getTleLines(Satellite sat, {bool forceNetwork = false}) async {
     final prefs = await SharedPreferences.getInstance();

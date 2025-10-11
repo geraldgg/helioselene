@@ -20,6 +20,7 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
+  final DateFormat dateFmt = DateFormat('yyyy-MM-dd HH:mm');
   List<Transit> _events = [];
   bool _busy = false;
   String? _error;
@@ -30,7 +31,6 @@ class _HomePageState extends State<HomePage> {
   double? _lat;
   double? _lon;
   double? _altM;
-  bool _locating = false;
   bool _autoAltFetching = false; // indicates background altitude fetch after GPS
 
   @override
@@ -46,7 +46,7 @@ class _HomePageState extends State<HomePage> {
     if (_altM != null && _altM!.abs() > 1.0) return;
     setState(() { _autoAltFetching = true; });
     try {
-      final uri = Uri.parse('https://api.open-elevation.com/api/v1/lookup?locations=' + lat.toStringAsFixed(6) + ',' + lon.toStringAsFixed(6));
+      final uri = Uri.parse('https://api.open-elevation.com/api/v1/lookup?locations=${lat.toStringAsFixed(6)},${lon.toStringAsFixed(6)}');
       final resp = await http.get(uri).timeout(const Duration(seconds: 6));
       if (resp.statusCode == 200) {
         final map = json.decode(resp.body) as Map<String, dynamic>;
@@ -70,7 +70,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _initLocation() async {
-    setState(() { _locating = true; _error = null; });
+    setState(() { _error = null; });
     try {
       final hasPerm = await _ensureLocationPermission();
       if (!hasPerm) {
@@ -91,7 +91,7 @@ class _HomePageState extends State<HomePage> {
     } catch (e) {
       setState(() { _error = 'Failed to get location: $e'; });
     } finally {
-      if (mounted) setState(() { _locating = false; });
+
     }
   }
 
@@ -129,8 +129,10 @@ class _HomePageState extends State<HomePage> {
           return;
         }
       }
-      final DateTime startUtc = DateTime.now().toUtc();
-      final DateTime endUtc = startUtc.add(const Duration(days: 15));
+      // Use current UTC hour rounded down as start time
+      final now = DateTime.now().toUtc();
+      final startUtc = DateTime.utc(now.year, now.month, now.day, now.hour);
+      final endUtc = startUtc.add(const Duration(days: 15));
       final results = await NativeCore.predictTransitsForSatellites(
         satellites: _satellites,
         lat: _lat!,
@@ -196,81 +198,82 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    // Use local time formatting now (no timezone label)
-    final dateFmt = DateFormat('yyyy-MM-dd HH:mm:ss');
-    final coordsText = (_lat != null && _lon != null)
-        ? 'Lat: ${_lat!.toStringAsFixed(5)}  Lon: ${_lon!.toStringAsFixed(5)}  Alt: ' +
-            (_altM != null ? _altM!.toStringAsFixed(0) + ' m' + (_autoAltFetching && (_altM == null || _altM!.abs() <= 1.0) ? ' (updating…)':'') : (_autoAltFetching ? '…' : '—'))
-        : _locating ? 'Locating…' : 'Location unknown';
     return Scaffold(
-      appBar: AppBar(title: const Text('HelioSelene Transits')),
+      appBar: AppBar(
+        title: const Text('HelioSelene Transit'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings),
+            onPressed: () async {
+              await Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => _SettingsPage(_satellites, _maxDistanceKm, (sats, dist) {
+                  setState(() {
+                    for (int i = 0; i < _satellites.length; i++) {
+                      _satellites[i].selected = sats[i].selected;
+                    }
+                    _maxDistanceKm = dist;
+                  });
+                }))
+              );
+            },
+          ),
+        ],
+      ),
       body: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(16.0),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Expanded(child: Text(coordsText)),
-                IconButton(
-                  icon: const Icon(Icons.map_outlined),
-                  tooltip: 'Pick location on map',
-                  onPressed: _busy ? null : _pickLocation,
-                ),
-                IconButton(
-                  icon: const Icon(Icons.my_location),
-                  tooltip: 'Refresh GPS location',
-                  onPressed: _busy ? null : _initLocation,
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
+            // Location info card with action icons
             Card(
               elevation: 2,
+              margin: const EdgeInsets.only(bottom: 16),
               child: Padding(
-                padding: const EdgeInsets.all(8.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    const Text('Satellites', style: TextStyle(fontWeight: FontWeight.bold)),
-                    ..._satellites.map((sat) => CheckboxListTile(
-                          contentPadding: EdgeInsets.zero,
-                          dense: true,
-                          title: Text(sat.name),
-                          value: sat.selected,
-                          onChanged: _busy ? null : (v) {
-                            setState(() { sat.selected = v ?? false; });
-                          },
-                        )),
-                    Row(
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Your location', style: Theme.of(context).textTheme.labelMedium),
+                          const SizedBox(height: 4),
+                          Text('Lat: ${_lat?.toStringAsFixed(5) ?? '—'}'),
+                          Text('Lon: ${_lon?.toStringAsFixed(5) ?? '—'}'),
+                          Text('Alt: ${_altM != null ? '${_altM!.toStringAsFixed(0)} m${(_autoAltFetching && (_altM == null || _altM!.abs() <= 1.0)) ? ' (updating…)' : ''}' : (_autoAltFetching ? '…' : '—')}'),
+                        ],
+                      ),
+                    ),
+                    Column(
                       children: [
-                        const Text('Max distance (km):'),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Slider(
-                            value: _maxDistanceKm,
-                            min: 0,
-                            max: 200,
-                            divisions: 200,
-                            label: _maxDistanceKm.toStringAsFixed(0),
-                            onChanged: _busy ? null : (v) => setState(()=> _maxDistanceKm = v),
-                          ),
+                        IconButton(
+                          icon: const Icon(Icons.my_location),
+                          tooltip: 'Refresh GPS location',
+                          onPressed: _busy ? null : _initLocation,
                         ),
-                        SizedBox(
-                          width: 48,
-                          child: Text(_maxDistanceKm.toStringAsFixed(0), textAlign: TextAlign.end),
-                        )
+                        IconButton(
+                          icon: const Icon(Icons.map),
+                          tooltip: 'Pick location on map',
+                          onPressed: _busy ? null : _pickLocation,
+                        ),
                       ],
-                    )
+                    ),
                   ],
                 ),
               ),
             ),
-            const SizedBox(height: 8),
-            ElevatedButton.icon(
-              onPressed: _busy ? null : _runPrediction,
-              icon: const Icon(Icons.auto_awesome),
-              label: const Text('Predict next 15 days'),
+            // Prediction row
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _busy ? null : _runPrediction,
+                    icon: const Icon(Icons.auto_awesome),
+                    label: const Text('Predict next 15 days'),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 12),
             if (_busy) const LinearProgressIndicator(),
@@ -287,7 +290,7 @@ class _HomePageState extends State<HomePage> {
                     )
                   : ListView.separated(
                       itemCount: _events.length,
-                      separatorBuilder: (_, __) => const Divider(),
+                      separatorBuilder: (context, index) => const Divider(),
                       itemBuilder: (context, i) {
                         final e = _events[i];
                         final satLabel = e.satellite ?? 'Unknown';
@@ -468,6 +471,66 @@ class _HomePageState extends State<HomePage> {
                 ),
               ),
             ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// Settings page for satellite selection and max distance
+class _SettingsPage extends StatefulWidget {
+  final List<Satellite> satellites;
+  final double maxDistanceKm;
+  final void Function(List<Satellite>, double) onSave;
+  const _SettingsPage(this.satellites, this.maxDistanceKm, this.onSave);
+  @override
+  State<_SettingsPage> createState() => _SettingsPageState();
+}
+class _SettingsPageState extends State<_SettingsPage> {
+  late List<Satellite> _satellites;
+  late double _maxDistanceKm;
+  @override
+  void initState() {
+    super.initState();
+    _satellites = widget.satellites.map((s) => Satellite(name: s.name, noradId: s.noradId, tleUrl: s.tleUrl, selected: s.selected)).toList();
+    _maxDistanceKm = widget.maxDistanceKm;
+  }
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Settings')),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Satellites', style: Theme.of(context).textTheme.titleMedium),
+            ..._satellites.map((sat) => CheckboxListTile(
+              title: Text(sat.name),
+              value: sat.selected,
+              onChanged: (v) {
+                setState(() { sat.selected = v ?? false; });
+              },
+            )),
+            const SizedBox(height: 16),
+            Text('Max travel distance (km)', style: Theme.of(context).textTheme.titleMedium),
+            Slider(
+              min: 0,
+              max: 100,
+              divisions: 20,
+              value: _maxDistanceKm,
+              label: _maxDistanceKm.toStringAsFixed(0),
+              onChanged: (v) { setState(() { _maxDistanceKm = v; }); },
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton(
+              onPressed: () {
+                widget.onSave(_satellites, _maxDistanceKm);
+                Navigator.of(context).pop();
+              },
+              child: const Text('Save'),
+            ),
           ],
         ),
       ),
