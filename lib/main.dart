@@ -5,6 +5,7 @@ import 'screens/home_page.dart';
 import 'package:logging/logging.dart';
 import 'core/ffi.dart';
 import 'core/shared_tile_provider.dart';
+import 'core/notification_service.dart';
 import 'models/satellite.dart';
 
 Future<void> main() async {
@@ -57,6 +58,14 @@ Future<void> main() async {
     } catch (e) {
       // ignore: avoid_print
       print('Prediction at startup failed: $e');
+    }
+
+    // Initialize notifications (local scheduling service)
+    try {
+      await NotificationService.init();
+    } catch (e) {
+      // ignore: avoid_print
+      print('Notification init failed: $e');
     }
 
     runApp(const MyApp());

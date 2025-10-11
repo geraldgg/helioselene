@@ -4,6 +4,7 @@ import 'package:geolocator/geolocator.dart';
 import 'dart:ui' show lerpDouble; // added for hero scaling
 import 'dart:async' show unawaited; // for unawaited background futures
 import '../core/ffi.dart';
+import '../core/notification_service.dart';
 import '../models/transit.dart';
 import '../models/satellite.dart';
 import '../widgets/transit_visual.dart'; // added for preview images
@@ -154,6 +155,10 @@ class _HomePageState extends State<HomePage> {
           _error = null; // ensure cleared
         }
       });
+      if (results.isNotEmpty) {
+        // Schedule or refresh local notifications (hybrid window approach)
+        unawaited(NotificationService.scheduleRollingWindow(results));
+      }
     } catch (e) {
       setState(() { _error = e.toString(); });
     } finally {
@@ -522,6 +527,24 @@ class _SettingsPageState extends State<_SettingsPage> {
               value: _maxDistanceKm,
               label: _maxDistanceKm.toStringAsFixed(0),
               onChanged: (v) { setState(() { _maxDistanceKm = v; }); },
+            ),
+            const SizedBox(height: 24),
+            Text('Notifications', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            ElevatedButton.icon(
+              onPressed: () async {
+                await NotificationService.sendTestNotification();
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Test notification sent! Check your notification panel.'),
+                      duration: Duration(seconds: 3),
+                    ),
+                  );
+                }
+              },
+              icon: const Icon(Icons.notifications),
+              label: const Text('Test Notifications'),
             ),
             const SizedBox(height: 16),
             ElevatedButton(
