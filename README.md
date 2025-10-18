@@ -104,4 +104,86 @@ Open an issue or PR with focused improvements (performance, UI polish, new satel
 Celestrak TLE data • SGP4 model • Skyfield (validation) • Flutter & Rust ecosystems
 
 ---
+## Updating the App Icon
+You already have `flutter_launcher_icons` configured in `pubspec.yaml`:
+```
+flutter_launcher_icons:
+  android:
+    generate: true
+  ios:
+    generate: true
+  windows:
+    generate: true
+  macos:
+    generate: true
+  image_path: "app_icon.png"
+```
+Follow these steps to make Flutter use your new icon everywhere:
+
+1. Replace the source image
+   - Put your new base icon file at the project root as `app_icon.png` (or change `image_path` accordingly). Ideal: 1024x1024 PNG, square, transparent background if possible.
+   - Keep important graphic elements centered; avoid very fine details (downscaling).
+
+2. (Optional) Configure adaptive Android icon
+   - If you want a proper adaptive icon (foreground + background), edit the `flutter_launcher_icons` section:
+     ```yaml
+     flutter_launcher_icons:
+       android:
+         generate: true
+         adaptive_icon_background: "#121321"  # or background image like assets/icon_bg.png
+         adaptive_icon_foreground: "assets/icon_fg.png"
+       ios:
+         generate: true
+       windows:
+         generate: true
+       macos:
+         generate: true
+       image_path: "app_icon.png"  # still used for other platforms
+     ```
+   - Create `assets/icon_fg.png` (transparent foreground) and optionally a solid color or image background.
+
+3. Run the generator
+   - From project root:
+     ```cmd
+     flutter pub get
+     flutter pub run flutter_launcher_icons:main
+     ```
+   - This populates platform-specific icon asset folders:
+     - Android: `android/app/src/main/res/mipmap-*` & any adaptive XML files
+     - iOS: `ios/Runner/Assets.xcassets/AppIcon.appiconset` (many sizes)
+     - Windows: icon in `windows/runner/resources`
+     - macOS: `macos/Runner/Assets.xcassets/AppIcon.appiconset`
+
+4. Clean & rebuild (to purge cached old assets)
+   ```cmd
+   flutter clean
+   flutter pub get
+   flutter run
+   ```
+
+5. Web & Linux manual steps
+   - Web: Replace `web/favicon.png` plus optional `web/icons/` images. You can export scaled versions (e.g., 192, 512) for PWA. Update `web/manifest.json` `icons` entries if sizes change.
+   - Linux: If you distribute a packaged build, ensure an icon is included; Flutter on Linux can use the generated PNG placed under `linux/` (plugin may not generate automatically). You can copy one of the generated 256x256 PNGs into `linux/assets/icon.png` and reference it in packaging metadata (snap/flatpak spec).
+
+6. Verify
+   - Android: Check launcher icon (installed app list) + shape adaptation (circle, squircle) on different devices.
+   - iOS: Run on simulator & physical device (light/dark mode) ensuring no unintended background.
+   - Windows/macOS: App icon in taskbar/dock and in installer if you build one.
+   - Web: Favicon displays; PWA install shows correct icon sizes.
+
+7. Version control
+   - Commit the updated generated asset folders. They’re deterministic; if very large you can regenerate, but keeping them avoids requiring the plugin at runtime.
+
+Common pitfalls & tips:
+- Blurriness: Start from a crisp vector or high-res bitmap (1024x1024) before scaling.
+- Transparent edges clipped: Leave safe margin ~8–10% around artwork.
+- Adaptive mismatch: Foreground should NOT include background color; let the mask shape handle it.
+- iOS needs no alpha bleeding: avoid semi-transparent outer pixels (could produce halo).
+
+Undo / change later:
+- Replace `app_icon.png` (and adaptive foreground/background files) then re-run the generator.
+
+If you want a separate dark-mode variant, that’s not supported directly for launcher icons; create a single design that looks good in both themes.
+
+---
 *Clear skies & sharp transits.*
