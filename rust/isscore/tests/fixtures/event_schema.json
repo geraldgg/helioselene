@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "description": "Golden schema for FFI event JSON emitted by predict_transits. Update when native struct changes intentionally.",
+  "event_keys": [
+    "time_utc",
+    "body",
+    "separation_arcmin",
+    "target_radius_arcmin",
+    "kind",
+    "sat_alt_deg",
+    "sat_az_deg",
+    "target_alt_deg",
+    "satellite",
+    "speed_deg_per_s",
+    "speed_arcmin_per_s",
+    "velocity_alt_deg_per_s",
+    "velocity_az_deg_per_s",
+    "motion_direction_deg",
+    "duration_s",
+    "sat_angular_size_arcsec",
+    "sat_distance_km"
+  ],
+  "field_types": {
+    "time_utc": "string",
+    "body": "string",
+    "separation_arcmin": "number",
+    "target_radius_arcmin": "number",
+    "kind": "string",
+    "sat_alt_deg": "number",
+    "sat_az_deg": "number",
+    "target_alt_deg": "number",
+    "satellite": "string",
+    "speed_deg_per_s": "number",
+    "speed_arcmin_per_s": "number",
+    "velocity_alt_deg_per_s": "number",
+    "velocity_az_deg_per_s": "number",
+    "motion_direction_deg": "number",
+    "duration_s": "number",
+    "sat_angular_size_arcsec": "number",
+    "sat_distance_km": "number"
+  },
+  "required_non_empty": [
+    "time_utc",
+    "body",
+    "kind",
+    "satellite"
+  ]
+}

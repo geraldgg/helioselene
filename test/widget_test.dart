@@ -1,30 +1,72 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:helioselene/models/transit.dart';
+import 'package:helioselene/widgets/transit_visual.dart';
 
-import 'package:helioselene/main.dart';
+Transit _buildTransit({
+  required double minSeparationArcmin,
+  required double targetRadiusArcmin,
+}) {
+  return Transit(
+    timeUtc: DateTime.utc(2025, 10, 10, 6, 43, 45),
+    body: 'Sun',
+    kind: 'Transit',
+    minSeparationArcmin: minSeparationArcmin,
+    durationSeconds: 1.8,
+    bodyAltitudeDeg: 15.0,
+    issRangeKm: 800,
+    issAngularSizeArcsec: 54,
+    satAzDeg: 120,
+    satellite: 'ISS',
+    targetRadiusArcmin: targetRadiusArcmin,
+    satAltitudeDeg: 45,
+    speedDegPerS: 0.25,
+    speedArcminPerS: 0.25 * 60,
+    velocityAltDegPerS: 0.05,
+    velocityAzDegPerS: 0.12,
+    motionDirectionDeg: 135,
+  );
+}
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  group('ChordInfo.fromTransit', () {
+    test('returns transit chord when separation inside disc', () {
+      final transit = _buildTransit(
+        minSeparationArcmin: 4.0,
+        targetRadiusArcmin: 16.0,
+      );
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+      final chord = ChordInfo.fromTransit(transit);
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
+      expect(chord.isTransit, isTrue);
+      expect(chord.offsetArcmin, closeTo(4.0, 1e-6));
+      // Chord = 2 * sqrt(r^2 - d^2) with r=16, d=4 -> ~30.983
+      expect(chord.chordArcmin, closeTo(30.983866, 1e-6));
+    });
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    test('marks near-miss when separation exceeds target radius', () {
+      final transit = _buildTransit(
+        minSeparationArcmin: 25.0,
+        targetRadiusArcmin: 16.0,
+      );
+
+      final chord = ChordInfo.fromTransit(transit);
+
+      expect(chord.isTransit, isFalse);
+      expect(chord.chordArcmin, equals(0));
+      expect(chord.offsetArcmin, equals(25.0));
+    });
+
+    test('returns zero chord when radius is invalid', () {
+      final transit = _buildTransit(
+        minSeparationArcmin: 5.0,
+        targetRadiusArcmin: 0.0,
+      );
+
+      final chord = ChordInfo.fromTransit(transit);
+
+      expect(chord.isTransit, isFalse);
+      expect(chord.chordArcmin, equals(0));
+      expect(chord.offsetArcmin, equals(0));
+    });
   });
 }

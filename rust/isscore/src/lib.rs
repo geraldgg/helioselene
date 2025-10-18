@@ -362,7 +362,7 @@ fn refine_minimum(
     let sat_topo_ecef = mat_mul_vec(&rot_inv, &sat_topo_best);
     let sat_topo_sez = ecef_to_sez(&sat_topo_ecef, observer_lat_rad, observer_lon_rad);
     let (_, sat_az) = altaz(&sat_topo_sez);
-
+    
     let body_distance = body_topo.norm();
     let body_radius_km = match body {
         "Sun" => SUN_RADIUS_KM,

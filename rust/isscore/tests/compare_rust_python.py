@@ -50,6 +50,7 @@ if result.returncode == 0 or result.stdout:
     for i, evt in enumerate(python_events, 1):
         az_str = f" | Az: {evt.get('sat_az_deg', 0):6.2f}°" if 'sat_az_deg' in evt else ""
         print(f"Event {i}: {evt['time_utc'][:19]}")
+        print(str(evt))
         print(f"  Body: {evt['body']:4} | Kind: {evt['kind']:10} | Sep: {evt['separation_arcmin']:6.2f}' | Alt: {evt['sat_alt_deg']:5.2f}°{az_str}")
 else:
     print(f"Error: {result.stderr}")

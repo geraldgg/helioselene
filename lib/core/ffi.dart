@@ -177,6 +177,67 @@ class NativeCore {
       }
     }
   }
+
+  static Future<List<Transit>> predictTransitsForSatellite({
+    required String satId,
+    required double lat,
+    required double lon,
+    required double altM,
+    required int startEpochSec,
+    required int endEpochSec,
+    double maxDistanceKm = 35.0,
+  }) async {
+    // Normalize and resolve satellite metadata
+    int? norad;
+    try { norad = int.parse(satId); } catch (_) {}
+    if (norad == null) {
+      _logger.warning('[FFI] Invalid NORAD id: $satId');
+      return [];
+    }
+    Satellite sat;
+    try {
+      sat = Satellite.supportedSatellites.firstWhere((s) => s.noradId == norad);
+    } catch (_) {
+      // Fallback generic satellite object
+      sat = Satellite(
+        name: 'SAT $satId',
+        noradId: norad,
+        tleUrl: 'https://celestrak.org/NORAD/elements/gp.php?CATNR=$satId&FORMAT=TLE',
+        selected: true,
+      );
+    }
+    lastSatellitesAttempted = 1;
+    lastSuccessfulTleFetches = 0;
+    try {
+      final tle = await _TleCache.getTleLines(sat);
+      if (tle == null) {
+        _logger.warning('[FFI] No TLE for satellite $satId');
+        return [];
+      }
+      final (l1, l2) = tle;
+      if (l1.isEmpty || l2.isEmpty) {
+        _logger.warning('[FFI] Empty TLE lines for $satId');
+        return [];
+      }
+      lastSuccessfulTleFetches = 1;
+      final startUtc = DateTime.fromMillisecondsSinceEpoch(startEpochSec * 1000, isUtc: true);
+      final endUtc = DateTime.fromMillisecondsSinceEpoch(endEpochSec * 1000, isUtc: true);
+      final results = predictTransits(
+        tle1: l1,
+        tle2: l2,
+        lat: lat,
+        lon: lon,
+        altM: altM,
+        startUtc: startUtc,
+        endUtc: endUtc,
+        maxDistanceKm: maxDistanceKm,
+      );
+      return results.map((t) => t.copyWith(satellite: sat.name)).toList();
+    } catch (e, st) {
+      _logger.warning('[FFI] predictTransitsForSatellite exception: $e\n$st');
+      return [];
+    }
+  }
 }
 
 class _TleCache {

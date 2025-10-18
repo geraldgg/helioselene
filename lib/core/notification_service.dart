@@ -14,6 +14,7 @@ class NotificationService {
   static const _prefsKey = 'scheduled_transit_ids_v1';
   static const int defaultLeadMinutes = 10; // TODO: make user-configurable
   static const int maxEventsToSchedule = 40; // keep well under iOS 64 pending limit
+  static const int _serviceStatusId = 30001; // persistent background status notification ID
 
   static Future<void> init() async {
     if (_initialized) return;
@@ -211,5 +212,83 @@ class NotificationService {
       payload: 'transit',
       matchDateTimeComponents: null,
     );
+  }
+
+  /// Show or update a persistent notification indicating background refresh status (Android only).
+  /// Call when enabling/disabling service or after a background run completes.
+  static Future<void> showServiceStatus({
+    required bool enabled,
+    DateTime? lastRun,
+    DateTime? lastSuccess,
+    String? lastError,
+  }) async {
+    if (!_initialized) await init();
+
+    // iOS/macOS do not support truly persistent ongoing notifications like Android foreground services.
+    // We limit this to Android.
+    final androidImpl = _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+    if (androidImpl == null) return; // Not Android
+
+    if (!enabled) {
+      await hideServiceStatus();
+      return;
+    }
+
+    final now = DateTime.now();
+    String subtitle;
+    if (lastError != null && lastError.isNotEmpty) {
+      subtitle = 'Last error: $lastError';
+    } else if (lastSuccess != null) {
+      final ageMin = now.difference(lastSuccess).inMinutes;
+      subtitle = 'Last success ${ageMin}m ago';
+    } else if (lastRun != null) {
+      final ageMin = now.difference(lastRun).inMinutes;
+      subtitle = 'Last run ${ageMin}m ago';
+    } else {
+      subtitle = 'Waiting for first run';
+    }
+
+    final title = 'Background refresh';
+    final body = subtitle;
+
+    final details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        'background_service',
+        'Background Service',
+        channelDescription: 'Persistent status of HelioSelene background refresh',
+        importance: Importance.low,
+        priority: Priority.low,
+        ongoing: true,
+        category: AndroidNotificationCategory.service,
+        visibility: NotificationVisibility.public,
+        playSound: false,
+        enableVibration: false,
+        autoCancel: false,
+        onlyAlertOnce: true,
+        icon: '@mipmap/ic_launcher',
+      ),
+    );
+
+    try {
+      await _plugin.show(_serviceStatusId, title, body, details, payload: 'service_status');
+      // ignore: avoid_print
+      print('[Notifications] Service status notification updated: $body');
+    } catch (e) {
+      // ignore: avoid_print
+      print('[Notifications] Failed to show service status: $e');
+    }
+  }
+
+  /// Remove the persistent background status notification (Android).
+  static Future<void> hideServiceStatus() async {
+    if (!_initialized) return; // If not initialized, nothing scheduled
+    try {
+      await _plugin.cancel(_serviceStatusId);
+      // ignore: avoid_print
+      print('[Notifications] Service status notification hidden');
+    } catch (e) {
+      // ignore: avoid_print
+      print('[Notifications] Failed to hide service status: $e');
+    }
   }
 }

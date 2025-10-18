@@ -6,6 +6,7 @@ import 'package:logging/logging.dart';
 import 'core/ffi.dart';
 import 'core/shared_tile_provider.dart';
 import 'core/notification_service.dart';
+import 'core/background_service.dart';
 import 'models/satellite.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:intl/intl.dart';
@@ -70,6 +71,14 @@ Future<void> main() async {
     } catch (e) {
       // ignore: avoid_print
       print('Notification init failed: $e');
+    }
+
+    // Initialize background service for daily prediction refresh
+    try {
+      await BackgroundService.initialize();
+    } catch (e) {
+      // ignore: avoid_print
+      print('Background service init failed: $e');
     }
 
     runApp(const MyApp());

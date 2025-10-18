@@ -100,7 +100,7 @@ class Event:
     separation_deg: float
     target_radius_deg: float
     kind: str  # 'transit' or 'near'
-    iss_alt_deg: float
+    sat_alt_deg: float
     target_alt_deg: float
     lat: float = None
     lon: float = None
@@ -119,7 +119,7 @@ class Event:
             "separation_arcmin": round(self.separation_deg * 60.0, 1),
             "target_radius_arcmin": round(self.target_radius_deg * 60.0, 1),
             "kind": self.kind,
-            "iss_alt_deg": round(self.iss_alt_deg, 3),
+            "sat_alt_deg": round(self.sat_alt_deg, 3),
             "target_alt_deg": round(self.target_alt_deg, 3),
         }
         if self.lat is not None:
@@ -210,7 +210,7 @@ def find_pass_intervals(altitudes_deg: np.ndarray, times: np.ndarray, alt_min: f
 def refine_minimum(ts, sat, eph, observer, t_center, window_s: float, step_s: float, body: str) -> Tuple[datetime, float, float, float, float]:
     """Refine minimum separation around t_center for a given body.
 
-    Returns (dt_utc, separation_deg, target_radius_deg, iss_alt_deg, target_alt_deg)
+    Returns (dt_utc, separation_deg, target_radius_deg, sat_alt_deg, target_alt_deg)
     """
     n_before = int(window_s // step_s)
     # Build a list of datetimes around the center with fixed step in seconds
@@ -257,13 +257,13 @@ def refine_minimum(ts, sat, eph, observer, t_center, window_s: float, step_s: fl
     # Extract results
     t_min = times[i_min].utc_datetime().replace(tzinfo=timezone.utc)
     sep_min_deg = math.degrees(float(sep_rad[i_min]))
-    iss_alt_deg = float(sat_alt_min.degrees[0])
+    sat_alt_deg = float(sat_alt_min.degrees[0])
     target_alt_deg = float(tgt_alt_min.degrees[0])
     
     # Attach the range for downstream fast radius check
     refine_minimum.iss_range_km = float(sat_range_km[i_min])
 
-    return t_min, sep_min_deg, tgt_radius_deg, iss_alt_deg, target_alt_deg
+    return t_min, sep_min_deg, tgt_radius_deg, sat_alt_deg, target_alt_deg
 
 
 def haversine_km(lat1, lon1, lat2, lon2):
@@ -629,7 +629,7 @@ def compute_events(
                                 separation_deg=sep_min_deg,
                                 target_radius_deg=tgt_rad_deg,
                                 kind=kind,
-                                iss_alt_deg=sat_alt_deg,
+                                sat_alt_deg=sat_alt_deg,
                                 target_alt_deg=tgt_alt_deg,
                                 sat_name=sat_name,
                                 speed_deg_per_s=speed_deg_per_s,
@@ -812,7 +812,7 @@ def main():
         sat_size_disp = f"{e.sat_angular_size_arcsec:.1f}" if e.sat_angular_size_arcsec else "N/A"
         sat_dist_disp = f"{e.sat_distance_km:.1f}" if e.sat_distance_km else "N/A"
         duration_disp = f"{e.duration_s:.2f}" if e.duration_s else "N/A"
-        print(f"{dt_disp} | {sat_disp:10} | {e.body:4} | {e.kind:7} | {sep_arcsec:9.1f} | {rad_arcsec:16.1f} | {sat_size_disp:13} | {sat_dist_disp:10} | {duration_disp:11} | {e.iss_alt_deg:11.1f} | {e.target_alt_deg:14.1f}")
+        print(f"{dt_disp} | {sat_disp:10} | {e.body:4} | {e.kind:7} | {sep_arcsec:9.1f} | {rad_arcsec:16.1f} | {sat_size_disp:13} | {sat_dist_disp:10} | {duration_disp:11} | {e.sat_alt_deg:11.1f} | {e.target_alt_deg:14.1f}")
 
 
 if __name__ == "__main__":

@@ -89,7 +89,7 @@ class Transit {
     // --- Field extraction with fallbacks matching Rust JSON ---
     final durationSeconds = (j['duration_s'] ?? j['durationSeconds'] ?? 0).toDouble();
     final bodyAltitudeDeg = (j['target_alt_deg'] ?? j['body_alt_deg'] ?? j['bodyAltitudeDeg'] ?? 0).toDouble();
-    final satAltitudeDeg = (j['iss_alt_deg'] ?? j['sat_alt_deg'] ?? j['satAltitudeDeg'] ?? 0).toDouble();
+    final satAltitudeDeg = (j['sat_alt_deg'] ?? j['sat_alt_deg'] ?? j['satAltitudeDeg'] ?? 0).toDouble();
     final issRangeKm = (j['sat_distance_km'] ?? j['sat_range_km'] ?? j['iss_range_km'] ?? j['issRangeKm'] ?? 0).toDouble();
     final issAngularSizeArcsec = (j['sat_angular_size_arcsec'] ?? j['sat_ang_size_arcsec'] ?? j['iss_ang_size_arcsec'] ?? j['issAngularSizeArcsec'] ?? 0).toDouble();
     final satAzDeg = (j['sat_az_deg'] ?? j['satAzDeg'] ?? 0).toDouble();

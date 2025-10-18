@@ -5,6 +5,7 @@ import 'dart:ui' show lerpDouble; // added for hero scaling
 import 'dart:async' show unawaited; // for unawaited background futures
 import '../core/ffi.dart';
 import '../core/notification_service.dart';
+import '../core/background_service.dart';
 import '../models/transit.dart';
 import '../models/satellite.dart';
 import '../widgets/transit_visual.dart'; // added for preview images
@@ -13,6 +14,7 @@ import 'location_picker_page.dart'; // added for manual location selection
 import 'package:http/http.dart' as http; // for fallback altitude lookup
 import 'dart:convert'; // for decoding elevation service
 import 'package:flutter/services.dart';
+import 'dart:io' show Platform; // added for background service platform check
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -550,6 +552,11 @@ class _SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<_SettingsPage> {
   late List<Satellite> _satellites;
   late double _maxDistanceKm;
+  bool _backgroundRefreshEnabled = true;
+  bool _loadingBackgroundPref = true;
+  bool _bgSupported = BackgroundService.isSupported;
+  String? _lastRunInfo;
+  bool _testingBackground = false;
 
   // Local translations cache (reuse approach from HomePage)
   Map<String, String> _i18n = {};
@@ -561,6 +568,83 @@ class _SettingsPageState extends State<_SettingsPage> {
     super.initState();
     _satellites = widget.satellites.map((s) => Satellite(name: s.name, noradId: s.noradId, tleUrl: s.tleUrl, selected: s.selected)).toList();
     _maxDistanceKm = widget.maxDistanceKm;
+    _loadBackgroundPreference();
+  }
+
+  Future<void> _loadBackgroundPreference() async {
+    if (!_bgSupported) {
+      if (mounted) {
+        setState(() {
+          _backgroundRefreshEnabled = false;
+          _loadingBackgroundPref = false;
+        });
+      }
+      return;
+    }
+    final enabled = await BackgroundService.isEnabled();
+    final lastRun = await BackgroundService.getLastRun();
+    final lastSuccess = await BackgroundService.getLastSuccess();
+    final lastError = await BackgroundService.getLastError();
+
+    String? info;
+    if (lastRun != null) {
+      final diff = DateTime.now().difference(lastRun);
+      info = 'Last run: ${_formatDuration(diff)} ago';
+      if (lastSuccess != null) {
+        final successDiff = DateTime.now().difference(lastSuccess);
+        info += '\nLast success: ${_formatDuration(successDiff)} ago';
+      }
+      if (lastError != null && lastError.isNotEmpty) {
+        info += '\nLast error: $lastError';
+      }
+    } else {
+      info = 'Never run yet';
+    }
+
+    if (mounted) {
+      setState(() {
+        _backgroundRefreshEnabled = enabled;
+        _loadingBackgroundPref = false;
+        _lastRunInfo = info;
+      });
+    }
+  }
+
+  String _formatDuration(Duration d) {
+    if (d.inDays > 0) return '${d.inDays}d';
+    if (d.inHours > 0) return '${d.inHours}h';
+    if (d.inMinutes > 0) return '${d.inMinutes}m';
+    return '${d.inSeconds}s';
+  }
+
+  Future<void> _testBackgroundRefresh() async {
+    if (!_bgSupported) return;
+    setState(() { _testingBackground = true; });
+    try {
+      await BackgroundService.runNow();
+      await Future.delayed(const Duration(seconds: 2));
+      await _loadBackgroundPreference();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(tr('backgroundTestSuccess')),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() { _testingBackground = false; });
+    }
   }
 
   @override
@@ -625,6 +709,55 @@ class _SettingsPageState extends State<_SettingsPage> {
             ),
             const SizedBox(height: 24),
             Text(tr('notificationsLabel'), style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            if (!_loadingBackgroundPref && _bgSupported)
+              SwitchListTile(
+                title: Text(tr('backgroundRefreshLabel')),
+                subtitle: Text(tr('backgroundRefreshSubtitle')),
+                value: _backgroundRefreshEnabled,
+                onChanged: (value) async {
+                  if (value) {
+                    await BackgroundService.enable();
+                  } else {
+                    await BackgroundService.disable();
+                  }
+                  if (mounted) {
+                    setState(() { _backgroundRefreshEnabled = value; });
+                    await _loadBackgroundPreference();
+                  }
+                },
+              ),
+            if (_bgSupported && _lastRunInfo != null)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Text(
+                  _lastRunInfo!,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    fontStyle: FontStyle.italic,
+                    color: Colors.grey[600],
+                  ),
+                ),
+              ),
+            if (_bgSupported)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: ElevatedButton.icon(
+                  onPressed: _testingBackground ? null : _testBackgroundRefresh,
+                  icon: _testingBackground
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.play_arrow),
+                  label: Text(tr('testBackgroundRefresh')),
+                ),
+              ),
+            if (!_bgSupported)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Text(tr('backgroundRefreshUnsupported'), style: Theme.of(context).textTheme.bodySmall),
+              ),
             const SizedBox(height: 8),
             ElevatedButton.icon(
               onPressed: () async {

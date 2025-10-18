@@ -3,14 +3,15 @@
 
 import ctypes
 import json
+import os
 from datetime import datetime, timezone
 import platform
 
 # Load library
 if platform.system() == "Windows":
-    lib = ctypes.CDLL("target/release/isscore.dll")
+    lib = ctypes.CDLL(os.path.dirname(__file__)+"/../target/release/isscore.dll")
 else:
-    lib = ctypes.CDLL("target/release/libisscore.so")
+    lib = ctypes.CDLL(os.path.dirname(__file__)+"/../target/release/libisscore.so")
 
 # Setup
 lib.predict_transits.argtypes = [
